@@ -4,6 +4,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Build outside OneDrive: OneDrive locks files while syncing, which breaks Gradle.
+layout.buildDirectory.set(file("${System.getProperty("user.home")}/.storageinventory-build/app"))
+
 android {
     namespace = "com.malek.storageinventory"
     compileSdk = 35
@@ -53,4 +56,16 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("androidx.camera:camera-view:$camerax")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
+}
+
+
+// After each debug build, copy the APK back into the project's "apk" folder.
+val copyApk by tasks.registering(Copy::class) {
+    from(layout.buildDirectory.dir("outputs/apk/debug"))
+    include("*.apk")
+    into(rootProject.file("apk"))
+    rename { "StorageInventory.apk" }
+}
+afterEvaluate {
+    tasks.named("assembleDebug") { finalizedBy(copyApk) }
 }

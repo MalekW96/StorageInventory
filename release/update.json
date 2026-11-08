@@ -1,0 +1,6 @@
+{
+  "versionCode": 2,
+  "versionName": "1.1",
+  "apkUrl": "https://github.com/MalekW96/StorageInventory/releases/download/v1.1/StorageInventory.apk",
+  "notes": "Take a photo of each storage unit, container and item right after scanning its QR code. Photos show in the lists, at the top of each storage/container, and full screen when tapped. New Settings screen (gear icon) with Check for updates."
+}
