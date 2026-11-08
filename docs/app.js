@@ -3,7 +3,7 @@
 'use strict';
 
 const APP_VERSION = '2.1.1.1';
-const APP_BUILD = 1; // bumped for updates published under the same version number
+const APP_BUILD = 2; // bumped for updates published under the same version number
 
 // ===========================================================================
 // Small helpers
@@ -848,17 +848,17 @@ function renderHome() {
   let body;
   if (!storages.length) {
     const [icon, h, p] = arch
-      ? [ICON.archive, 'No archived bins', 'To archive bins: in Active storage tick their circles, then ☰ › Archive.']
+      ? [ICON.archive, 'No archived bins', 'To archive bins: in Active storage press and hold a bin, tick the ones you want, then ☰ › Archive.']
       : Store.storages().length
         ? [ICON.box, 'No active bins', 'Tap “New Bin” to add one. Archived bins are under ☰ › Archived storage.']
         : [ICON.box, 'No Storage Data Available', 'Tap “New Bin” to add your first one.'];
     body = `<div class="empty"><div class="empty-icon">${icon}</div><h2>${h}</h2><p>${esc(p)}</p></div>`;
   } else {
-    const hint = arch ? 'Tick bins, then ☰ › Unarchive. Archived bins can’t be opened.'
-      : sel ? 'Tick the bins to archive, then ☰ › Archive'
-      : 'Tick a bin’s circle to select it · swipe left for options';
+    const hint = sel ? (arch ? 'Tap bins to tick them, then ☰ › Unarchive' : 'Tap bins to tick them, then ☰ › Archive')
+      : arch ? 'Archived bins can’t be opened. Press and hold (or tap) a bin to select it, then ☰ › Unarchive'
+      : 'Press and hold a bin to select it · swipe left for options';
     body = `<div class="label">${arch ? 'Archived · ' : ''}${plural(storages.length, 'bin')}</div><div class="list">${storages.map((s) =>
-      nodeRow(s, countText(Store.countInside(s.id)), { tag: s.qr ? null : 'Temporary', select: state.selected.has(s.id) ? 'on' : 'off' })).join('')}</div>` +
+      nodeRow(s, countText(Store.countInside(s.id)), { tag: s.qr ? null : 'Temporary', select: sel ? (state.selected.has(s.id) ? 'on' : 'off') : null })).join('')}</div>` +
       `<p class="swipe-hint">${esc(hint)}</p>`;
   }
   const title = sel ? (state.selected.size ? `${state.selected.size} selected` : 'Select bins') : arch ? 'Archived storage' : 'Storage Inventory';

@@ -1,5 +1,5 @@
 {
   "version": "2.1.1.1",
-  "build": 1,
-  "notes": "Select bins right from the main page: every bin has a tick circle on its left. Tick the bins you want, then ☰ › Archive — the whole bin and everything in it is archived. In Archived storage, tick bins and use ☰ › Unarchive. Tapping the rest of a row still opens the bin."
+  "build": 2,
+  "notes": "Selecting bins: press and hold a bin on the main page; tick circles then appear on the left of every bin. Tap bins to tick them, then ☰ › Archive (or ☰ › Unarchive in Archived storage). The circles hide again when you finish or cancel."
 }

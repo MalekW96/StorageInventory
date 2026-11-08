@@ -981,7 +981,7 @@ private fun HomeScreen(
             when {
                 archivedView -> EmptyState(
                     title = "No archived bins",
-                    hint = "To archive bins: in Active storage tick their circles, then ☰ › Archive.",
+                    hint = "To archive bins: in Active storage press and hold a bin, tick the ones you want, then ☰ › Archive.",
                     modifier = Modifier.padding(padding),
                 )
                 store.storages().isNotEmpty() -> EmptyState(
@@ -1014,7 +1014,7 @@ private fun HomeScreen(
                         node = storage,
                         detail = countText(items, containers),
                         tag = if (storage.isTemporary) "Temporary" else null,
-                        selectState = storage.id in chosen,
+                        selectState = if (selectMode) storage.id in chosen else null,
                         onSelect = { onToggleSelect(storage) },
                         swipeEnabled = !selectMode,
                         onClick = { if (selectMode || archivedView) onToggleSelect(storage) else onOpen(storage) },
@@ -1026,9 +1026,10 @@ private fun HomeScreen(
                 item {
                     SwipeHint(
                         when {
-                            archivedView -> "Tick bins, then ☰ › Unarchive. Archived bins can’t be opened."
-                            selectMode -> "Tick the bins to archive, then ☰ › Archive"
-                            else -> "Tick a bin’s circle to select it · swipe left for options"
+                            selectMode && archivedView -> "Tap bins to tick them, then ☰ › Unarchive"
+                            selectMode -> "Tap bins to tick them, then ☰ › Archive"
+                            archivedView -> "Archived bins can’t be opened. Press and hold (or tap) a bin to select it, then ☰ › Unarchive"
+                            else -> "Press and hold a bin to select it · swipe left for options"
                         }
                     )
                 }
