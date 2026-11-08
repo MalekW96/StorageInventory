@@ -36,3 +36,11 @@ that source (Files app / browser) the first time.
 ## Tech
 Kotlin, Jetpack Compose (Material 3), CameraX, ML Kit barcode scanning (bundled,
 offline). Min Android 8.0 (API 26), target API 35.
+
+## iPhone / web version
+
+The `docs/` folder is a web version of the app that runs in Safari on iPhone (and any browser):
+https://malekw96.github.io/StorageInventory/
+
+Open it in Safari, tap Share, then "Add to Home Screen". It works offline, keeps data on the phone,
+and updates itself when a new version is pushed (Settings > Check for updates).
