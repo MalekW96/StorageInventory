@@ -1,5 +1,5 @@
 /* Service worker: makes the app work offline and lets "Check for updates" install new versions. */
-const VERSION = '2.0.0.0';
+const VERSION = '2.1.1.0';
 const CACHE = 'si-' + VERSION;
 const MODELS = 'si-models';
 const SHELL = [

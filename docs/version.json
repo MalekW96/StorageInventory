@@ -1,4 +1,4 @@
 {
-  "version": "2.0.0.0",
-  "notes": "New premium dark design: Geist type, blended header, borderless cards and a brass “New bin” button. Swipe a row left for More / Delete (replaces the ⋮ menus). New bins get default names like “Bin 001”. The S/C/I letter badges are replaced by a neutral box icon."
+  "version": "2.1.1.0",
+  "notes": "Archive mode: swipe a bin left › More › Archive to put it into long-term storage. The ☰ menu (top right, replaces the gear) switches between Active storage and Archived storage and opens Settings; a green dot shows where you are. “New Bin” now has a capital B."
 }

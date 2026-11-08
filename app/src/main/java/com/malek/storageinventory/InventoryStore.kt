@@ -23,6 +23,8 @@ data class Node(
     val createdAt: Long,
     /** All photos of this entry, first one is the main photo. */
     val photoPaths: List<String> = emptyList(),
+    /** Top-level bins put into long-term storage (shown under “Archived storage”). */
+    val archived: Boolean = false,
 ) {
     /** The main (first) photo. */
     val photoPath: String? get() = photoPaths.firstOrNull()
@@ -46,8 +48,22 @@ class InventoryStore(context: Context) {
         load()
     }
 
+    /** All top-level bins (active and archived). */
     fun storages(): List<Node> =
         nodes.filter { it.parentId == null }.sortedBy { it.name.lowercase() }
+
+    /** Top-level bins in one view: active or archived. */
+    fun storages(archived: Boolean): List<Node> = storages().filter { it.archived == archived }
+
+    /** Moves a bin into (or back out of) the archive. */
+    fun setArchived(id: String, archived: Boolean) {
+        val index = nodes.indexOfFirst { it.id == id }
+        if (index >= 0) {
+            nodes[index] = nodes[index].copy(archived = archived)
+            save()
+            ActivityLog.log(if (archived) "Archived" else "Moved to active", "“${nodes[index].name}”")
+        }
+    }
 
     /** Children with containers listed first, then items, each alphabetically. */
     fun children(parentId: String): List<Node> =
@@ -203,6 +219,7 @@ class InventoryStore(context: Context) {
                             // Versions before 1.4.2.1 stored a single photo.
                             if (o.isNull("photoPath")) null else o.optString("photoPath").ifBlank { null }
                         ),
+                        archived = o.optBoolean("archived", false),
                     )
                 )
             }
@@ -226,6 +243,7 @@ class InventoryStore(context: Context) {
                     .put("createdAt", n.createdAt)
                     .put("photos", JSONArray(n.photoPaths))
                     .put("photoPath", n.photoPath ?: JSONObject.NULL)
+                    .put("archived", n.archived)
             )
         }
         val json = JSONObject().put("version", 1).put("nodes", array).toString()

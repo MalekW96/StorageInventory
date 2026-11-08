@@ -2,7 +2,7 @@
  * Everything is stored on the device (IndexedDB). No account, no server. */
 'use strict';
 
-const APP_VERSION = '2.0.0.0';
+const APP_VERSION = '2.1.1.0';
 
 // ===========================================================================
 // Small helpers
@@ -42,6 +42,9 @@ const ICON = {
   qr: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z"/><path d="M14 14h2v2h-2zM18 14h2M14 18h2M18 18h2v2"/></svg>',
   sheet: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M10 4v16"/></svg>',
   pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m14 6 4 4"/></svg>',
+  menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
+  archive: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M3 4.5h18v4H3zM4.5 8.5v11h15v-11M10 12.5h4"/></svg>',
+  sliders: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 7h7M15 7h5M4 17h3M11 17h9"/><circle cx="13" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>',
   clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
 };
 
@@ -126,7 +129,11 @@ const Store = {
     }
   },
   get(id) { return this.nodes.find((n) => n.id === id) || null; },
-  storages() { return this.nodes.filter((n) => !n.parentId).sort((a, b) => a.name.localeCompare(b.name)); },
+  storages(archived) {
+    return this.nodes.filter((n) => !n.parentId && (archived === undefined || !!n.archived === archived))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  },
+  isArchived(id) { const root = this.path(id)[0]; return !!(root && root.archived); },
   children(id) {
     return this.nodes.filter((n) => n.parentId === id)
       .sort((a, b) => (a.type === 'ITEM') - (b.type === 'ITEM') || a.name.localeCompare(b.name));
@@ -166,6 +173,7 @@ const Store = {
     await DB.put('nodes', n);
     if ('name' in patch) Log.add('Renamed', `“${before.name}” → “${n.name}”`);
     if ('qr' in patch) Log.add('QR code assigned', `“${n.name}” · QR ${n.qr}`);
+    if ('archived' in patch) Log.add(n.archived ? 'Archived' : 'Moved to active', `“${n.name}”`);
   },
   async addPhoto(id, photoId) {
     const n = this.get(id);
@@ -524,9 +532,15 @@ function showMenu(anchor, items) {
   menu.className = 'menu';
   for (const it of items) {
     if (!it) continue;
+    if (it === '-') { const hr = document.createElement('div'); hr.className = 'menu-sep'; menu.appendChild(hr); continue; }
     const b = document.createElement('button');
-    b.textContent = it.label;
-    if (it.danger) b.className = 'danger';
+    if (it.icon || it.count != null || it.current != null) {
+      b.className = 'rich';
+      b.innerHTML = `${it.icon || ''}<span class="ml">${esc(it.label)}</span>` +
+        (it.count != null ? `<span class="mc">${it.count}</span>` : '') +
+        `<span class="dot${it.current ? ' on' : ''}"></span>`;
+    } else b.textContent = it.label;
+    if (it.danger) b.classList.add('danger');
     b.disabled = !!it.disabled;
     b.onclick = (e) => { e.stopPropagation(); layer.remove(); it.onClick(); };
     menu.appendChild(b);
@@ -685,6 +699,7 @@ function textDialog({ title, label, initial = '', confirm = 'Save' }) {
 // ===========================================================================
 const state = {
   screen: 'home',        // home | detail | search | settings
+  archived: false,       // home shows archived bins instead of active ones
   stack: [],             // ids of opened storages/containers
   search: { query: '', photoBlob: null, photoUrl: null, results: null, progress: null, error: null, note: null },
   update: null,          // { version, notes } when a newer version is published
@@ -762,7 +777,7 @@ function render() {
 
   const top = state.stack.length ? Store.get(state.stack[state.stack.length - 1]) : null;
   const screenName = state.screen === 'search' ? 'Search' : state.screen === 'settings' ? 'Settings'
-    : top ? `${typeLabel(top)}: ${top.name}` : 'Home';
+    : top ? `${typeLabel(top)}: ${top.name}` : state.archived ? 'Archived storage' : 'Active storage';
   if (screenName !== Log.screen) { Log.screen = screenName; Log.add('Opened screen', screenName); }
 
   let html = '';
@@ -794,24 +809,31 @@ function installBanner() {
 }
 
 function renderHome() {
-  const storages = Store.storages();
+  const arch = state.archived;
+  const storages = Store.storages(arch);
   const actions = `
     ${Store.nodes.length ? `<button class="icon-btn round" data-act="search" aria-label="Search">${ICON.search}</button>` : ''}
-    <button class="icon-btn round" data-act="settings" aria-label="Settings and updates">${ICON.gear}</button>`;
+    <button class="icon-btn round" data-act="main-menu" aria-label="Menu">${ICON.menu}</button>`;
   let body;
   if (!storages.length) {
-    body = `<div class="empty"><div class="empty-icon">${ICON.box}</div><h2>No Storage Data Available</h2><p>Tap “New bin” to add your first one.</p></div>`;
+    const [icon, h, p] = arch
+      ? [ICON.archive, 'No archived bins', 'To archive a bin, swipe it left › More › Archive.']
+      : Store.storages().length
+        ? [ICON.box, 'No active bins', 'Tap “New Bin” to add one. Archived bins are under ☰ › Archived storage.']
+        : [ICON.box, 'No Storage Data Available', 'Tap “New Bin” to add your first one.'];
+    body = `<div class="empty"><div class="empty-icon">${icon}</div><h2>${h}</h2><p>${esc(p)}</p></div>`;
   } else {
-    body = `<div class="label">${plural(storages.length, 'bin')}</div><div class="list">${storages.map((s) =>
+    body = `<div class="label">${arch ? 'Archived · ' : ''}${plural(storages.length, 'bin')}</div><div class="list">${storages.map((s) =>
       nodeRow(s, countText(Store.countInside(s.id)), { tag: s.qr ? null : 'Temporary' })).join('')}</div>${SWIPE_HINT}`;
   }
-  return topbar({ title: 'Storage Inventory', actions, home: true }) + updateBanner() + installBanner() +
-    `<main class="content">${body}</main><button class="fab" data-act="add-menu">${ICON.plus}New bin</button>`;
+  return topbar({ title: arch ? 'Archived storage' : 'Storage Inventory', actions, home: true }) + updateBanner() + installBanner() +
+    `<main class="content${arch ? ' no-fab' : ''}">${body}</main>` +
+    (arch ? '' : `<button class="fab" data-act="add-menu">${ICON.plus}New Bin</button>`);
 }
 
 function renderDetail() {
   const node = Store.get(state.stack[state.stack.length - 1]);
-  const crumbs = state.stack.length > 1 ? Store.location(node.id) : typeLabel(node);
+  const crumbs = state.stack.length > 1 ? Store.location(node.id) : node.archived ? 'Archived storage' : typeLabel(node);
   const kids = Store.children(node.id);
   const ph = photosOf(node);
   const header = ph.length
@@ -845,7 +867,7 @@ function searchResultsHtml() {
     const hits = Store.nodes.filter((n) => n.name.toLowerCase().includes(q) || (n.qr && n.qr.toLowerCase().includes(q)))
       .sort((a, b) => a.name.localeCompare(b.name));
     results = `<div class="label">${hits.length} result${hits.length === 1 ? '' : 's'} for “${esc(s.query.trim())}”</div>` +
-      hits.map((n) => nodeRow(n, `${typeLabel(n)} · ${Store.location(n.id) || 'Top level'}`)).join('');
+      hits.map((n) => nodeRow(n, `${typeLabel(n)} · ${Store.location(n.id) || 'Top level'}${Store.isArchived(n.id) ? ' · Archived' : ''}`)).join('');
   } else if (s.photoUrl) {
     results = `<div class="row" style="padding-left:0"><img class="thumb" src="${s.photoUrl}" alt="" style="width:72px;height:72px">
       <div class="main"><div class="name">Your photo</div><button class="btn text" data-act="clear-photo" style="padding-left:0">Clear</button></div></div>`;
@@ -859,7 +881,7 @@ function searchResultsHtml() {
       results += `<p class="hint">No similar items found. Try a closer photo with the object filling most of the frame.</p>`;
     } else {
       results += `<div class="label">Most similar</div>` +
-        s.results.map(({ node, score }) => nodeRow(node, `${typeLabel(node)} · ${Store.location(node.id) || 'Top level'}`, { score })).join('');
+        s.results.map(({ node, score }) => nodeRow(node, `${typeLabel(node)} · ${Store.location(node.id) || 'Top level'}${Store.isArchived(node.id) ? ' · Archived' : ''}`, { score })).join('');
     }
     if (s.note) results += `<p class="small-muted">${esc(s.note)}</p>`;
   } else {
@@ -1001,12 +1023,18 @@ function nodeMenu(anchor, node) {
   Log.add('Opened options', `“${node.name}”`);
   sheet({
     title: node.name,
-    subtitle: `${typeLabel(node)}${Store.location(node.id) ? ' · ' + Store.location(node.id) : ''}`,
+    subtitle: `${typeLabel(node)}${node.archived ? ' · Archived' : ''}${Store.location(node.id) ? ' · ' + Store.location(node.id) : ''}`,
     items: [
       { icon: ICON.info, label: 'Info', note: 'Date added, location, QR code', onClick: () => infoDialog(node) },
       { icon: ICON.camera, label: 'Add photo', onClick: () => flowAddPhoto(node) },
       !node.qr ? { icon: ICON.qr, label: 'Assign QR code', onClick: () => flowAssignQr(node) } : null,
       canHold(node) ? { icon: ICON.sheet, label: 'Export to Excel', onClick: () => exportStorageExcel(node) } : null,
+      !node.parentId ? {
+        icon: ICON.archive,
+        label: node.archived ? 'Move to active storage' : 'Archive',
+        note: node.archived ? 'Back in the main list' : 'Put into long-term storage',
+        onClick: () => flowToggleArchive(node),
+      } : null,
       { icon: ICON.pencil, label: 'Rename', onClick: () => flowRename(node) },
       { icon: ICON.trash, label: 'Delete', danger: true, onClick: () => flowDelete(node) },
     ],
@@ -1041,6 +1069,14 @@ async function flowNewStorage() {
   if (!res) return;
   const storage = await Store.add({ qr, name: res.name, type: 'STORAGE', photoIds: res.photoIds });
   openNode(storage);
+}
+
+async function flowToggleArchive(node) {
+  const toArchive = !node.archived;
+  await Store.update(node.id, { archived: toArchive });
+  render();
+  toast(toArchive ? `“${node.name}” moved to Archived storage. Open ☰ › Archived storage to find it.`
+    : `“${node.name}” is back in Active storage.`);
 }
 
 async function flowTemporaryStorage() {
@@ -1668,9 +1704,19 @@ document.addEventListener('click', (e) => {
   if (a === 'back') back();
   else if (a === 'search') go('search');
   else if (a === 'settings') { state.updateCheck = null; go('settings'); }
+  else if (a === 'main-menu') {
+    showMenu(act, [
+      { icon: ICON.box, label: 'Active storage', count: Store.storages(false).length, current: !state.archived,
+        onClick: () => { state.archived = false; go('home'); } },
+      { icon: ICON.archive, label: 'Archived storage', count: Store.storages(true).length, current: state.archived,
+        onClick: () => { state.archived = true; go('home'); } },
+      '-',
+      { icon: ICON.sliders, label: 'Settings', current: false, onClick: () => { state.updateCheck = null; go('settings'); } },
+    ]);
+  }
   else if (a === 'add-menu') {
     sheet({
-      title: 'New bin',
+      title: 'New Bin',
       items: [
         { icon: ICON.qr, label: 'Scan bin QR code', note: 'Then photograph the bin and name it', onClick: () => flowNewStorage() },
         { icon: ICON.clock, label: 'Temporary bin', note: 'No QR code yet, attach one later', onClick: () => flowTemporaryStorage() },

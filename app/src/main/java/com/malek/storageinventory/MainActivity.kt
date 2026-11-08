@@ -106,6 +106,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
@@ -270,6 +273,7 @@ fun InventoryApp(store: InventoryStore) {
     // Navigation: empty = home, otherwise the ids of opened storages/containers.
     val stack = rememberSaveable(saver = stackSaver) { mutableListOf<String>().toMutableStateList() }
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var showArchived by rememberSaveable { mutableStateOf(false) }
     var showSearch by rememberSaveable { mutableStateOf(false) }
     var searchPhoto by rememberSaveable { mutableStateOf<String?>(null) }
     // Photo-only item being added ("Take photo to add to existing storage")
@@ -461,8 +465,11 @@ fun InventoryApp(store: InventoryStore) {
             )
             current == null -> HomeScreen(
                 store = store,
+                archivedView = showArchived,
                 onNewBin = { showNewBin = true },
                 onFind = { showSearch = true },
+                onShowActive = { showArchived = false; ActivityLog.log("Opened screen", "Active storage") },
+                onShowArchived = { showArchived = true; ActivityLog.log("Opened screen", "Archived storage") },
                 onSettings = { showSettings = true },
                 onOpen = { stack.add(it.id) },
                 onOptions = { optionsFor = it.id },
@@ -706,7 +713,7 @@ fun InventoryApp(store: InventoryStore) {
     // Action sheets (replace the old three-dot menus)
     if (showNewBin) {
         ActionSheet(
-            title = "New bin",
+            title = "New Bin",
             subtitle = null,
             actions = listOf(
                 SheetAction(R.drawable.ic_qr, "Scan bin QR code", "Then photograph the bin and name it") { scanMode = ScanMode.NewStorage },
@@ -744,12 +751,22 @@ fun InventoryApp(store: InventoryStore) {
             val where = store.path(node.id).dropLast(1).joinToString(" › ") { it.name }
             ActionSheet(
                 title = node.name,
-                subtitle = (if (node.isTemporary) "Temporary storage" else typeLabel(node.type)) + (if (where.isNotEmpty()) " · $where" else ""),
+                subtitle = (if (node.isTemporary) "Temporary storage" else typeLabel(node.type)) +
+                    (if (node.archived) " · Archived" else "") + (if (where.isNotEmpty()) " · $where" else ""),
                 actions = listOfNotNull(
                     SheetAction(R.drawable.ic_info, "Info", "Date added, location, QR code") { infoFor = node.id },
                     SheetAction(R.drawable.ic_camera, "Add photo") { takePhoto("N$SEP${node.id}") },
                     if (!node.hasQr) SheetAction(R.drawable.ic_qr, "Assign QR code") { scanMode = ScanMode.AssignQr(node.id) } else null,
                     if (node.canHoldChildren) SheetAction(R.drawable.ic_table, "Export to Excel") { exportStorage(node) } else null,
+                    if (node.parentId == null) SheetAction(
+                        R.drawable.ic_archive,
+                        if (node.archived) "Move to active storage" else "Archive",
+                        if (node.archived) "Back in the main list" else "Put into long-term storage",
+                    ) {
+                        store.setArchived(node.id, !node.archived)
+                        message = if (node.archived) "“${node.name}” is back in Active storage."
+                        else "“${node.name}” moved to Archived storage. Open ☰ › Archived storage to find it."
+                    } else null,
                     SheetAction(R.drawable.ic_pencil, "Rename") { renaming = node },
                     SheetAction(R.drawable.ic_trash, "Delete", danger = true) { deleting = node },
                 ),
@@ -862,21 +879,24 @@ fun InventoryApp(store: InventoryStore) {
 @Composable
 private fun HomeScreen(
     store: InventoryStore,
+    archivedView: Boolean,
     onNewBin: () -> Unit,
     onFind: () -> Unit,
+    onShowActive: () -> Unit,
+    onShowArchived: () -> Unit,
     onSettings: () -> Unit,
     onOpen: (Node) -> Unit,
     onOptions: (Node) -> Unit,
     onDelete: (Node) -> Unit,
 ) {
-    val storages = store.storages()
+    val storages = store.storages(archivedView)
     Scaffold(
         containerColor = Bg,
         topBar = {
             TopAppBar(
                 title = {
                     Text(
-                        "Storage Inventory",
+                        if (archivedView) "Archived storage" else "Storage Inventory",
                         style = MaterialTheme.typography.headlineMedium,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
@@ -886,30 +906,52 @@ private fun HomeScreen(
                 colors = barColors(),
                 actions = {
                     if (store.nodes.isNotEmpty()) RoundIconButton(Icons.Filled.Search, "Search", onFind)
-                    RoundIconButton(Icons.Filled.Settings, "Settings and updates", onSettings)
+                    MainMenu(
+                        archivedView = archivedView,
+                        activeCount = store.storages(false).size,
+                        archivedCount = store.storages(true).size,
+                        onShowActive = onShowActive,
+                        onShowArchived = onShowArchived,
+                        onSettings = onSettings,
+                    )
                     Spacer(Modifier.width(8.dp))
                 },
             )
         },
-        floatingActionButton = { BrassButton("New bin", onNewBin) },
+        floatingActionButton = { if (!archivedView) BrassButton("New Bin", onNewBin) },
         floatingActionButtonPosition = FabPosition.Center,
     ) { padding ->
         if (storages.isEmpty()) {
-            EmptyState(
-                title = "No Storage Data Available",
-                hint = "Tap “New bin” to add your first one.",
-                modifier = Modifier.padding(padding),
-            )
+            when {
+                archivedView -> EmptyState(
+                    title = "No archived bins",
+                    hint = "To archive a bin, swipe it left › More › Archive.",
+                    modifier = Modifier.padding(padding),
+                )
+                store.storages().isNotEmpty() -> EmptyState(
+                    title = "No active bins",
+                    hint = "Tap “New Bin” to add one. Archived bins are under ☰ › Archived storage.",
+                    modifier = Modifier.padding(padding),
+                )
+                else -> EmptyState(
+                    title = "No Storage Data Available",
+                    hint = "Tap “New Bin” to add your first one.",
+                    modifier = Modifier.padding(padding),
+                )
+            }
         } else {
             LazyColumn(
                 contentPadding = PaddingValues(
                     start = 16.dp, end = 16.dp,
                     top = padding.calculateTopPadding() + 4.dp,
-                    bottom = padding.calculateBottomPadding() + 110.dp,
+                    bottom = padding.calculateBottomPadding() + if (archivedView) 32.dp else 110.dp,
                 ),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                item { SectionLabel(if (storages.size == 1) "1 bin" else "${storages.size} bins") }
+                item {
+                    val count = if (storages.size == 1) "1 bin" else "${storages.size} bins"
+                    SectionLabel(if (archivedView) "Archived · $count" else count)
+                }
                 items(storages, key = { it.id }) { storage ->
                     val (items, containers) = store.countInside(storage.id)
                     NodeRow(
@@ -961,6 +1003,7 @@ private fun DetailScreen(
                             overflow = TextOverflow.Ellipsis,
                         )
                         val crumbs = if (path.size > 1) path.dropLast(1).joinToString(" › ") { it.name }
+                        else if (node.archived) "Archived storage"
                         else if (node.isTemporary) "Temporary storage" else typeLabel(node.type)
                         Text(
                             crumbs,
@@ -1584,7 +1627,57 @@ private fun RoundIconButton(icon: Painter, description: String, onClick: () -> U
     ) { Icon(icon, contentDescription = description, modifier = Modifier.size(22.dp)) }
 }
 
-/** Brass call-to-action pill ("New bin", "Add item"). */
+private val Green = Color(0xFF5BC27A)
+
+/** ☰ menu on the home screen: switch between Active / Archived storage, or open Settings. */
+@Composable
+private fun MainMenu(
+    archivedView: Boolean,
+    activeCount: Int,
+    archivedCount: Int,
+    onShowActive: () -> Unit,
+    onShowArchived: () -> Unit,
+    onSettings: () -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        RoundIconButton(painterResource(R.drawable.ic_menu), "Menu") { open = true }
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            containerColor = Surface2,
+            shape = RoundedCornerShape(16.dp),
+        ) {
+            MainMenuItem(R.drawable.ic_box, "Active storage", activeCount, current = !archivedView) { open = false; onShowActive() }
+            MainMenuItem(R.drawable.ic_archive, "Archived storage", archivedCount, current = archivedView) { open = false; onShowArchived() }
+            HorizontalDivider(color = Color(0x14FFFFFF), modifier = Modifier.padding(vertical = 4.dp))
+            MainMenuItem(R.drawable.ic_settings, "Settings", null, current = false) { open = false; onSettings() }
+        }
+    }
+}
+
+@Composable
+private fun MainMenuItem(icon: Int, label: String, count: Int?, current: Boolean, onClick: () -> Unit) {
+    DropdownMenuItem(
+        leadingIcon = { Icon(painterResource(icon), contentDescription = null, tint = TextMuted, modifier = Modifier.size(20.dp)) },
+        text = {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.widthIn(min = 170.dp)) {
+                Text(label, color = TextHi, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                if (count != null) Text("$count", color = TextFaint, style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.width(10.dp))
+                Box(
+                    Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(if (current) Green else Color.Transparent)
+                )
+            }
+        },
+        onClick = onClick,
+    )
+}
+
+/** Brass call-to-action pill ("New Bin", "Add item"). */
 @Composable
 private fun BrassButton(text: String, onClick: () -> Unit) {
     val shape = RoundedCornerShape(30.dp)
@@ -2331,7 +2424,9 @@ private fun SearchScreen(
 
 @Composable
 private fun SearchResultRow(store: InventoryStore, node: Node, score: Float?, onClick: () -> Unit) {
-    val location = store.path(node.id).dropLast(1).joinToString(" › ") { it.name }.ifEmpty { "Top level" }
+    val fullPath = store.path(node.id)
+    val location = fullPath.dropLast(1).joinToString(" › ") { it.name }.ifEmpty { "Top level" } +
+        (if (fullPath.firstOrNull()?.archived == true) " · Archived" else "")
     Card(
         modifier = Modifier
             .fillMaxWidth()

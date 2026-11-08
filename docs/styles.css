@@ -215,6 +215,13 @@ button { cursor: pointer; }
 .menu button:active { background: var(--surface-3); }
 .menu button:disabled { opacity: 0.35; }
 .menu button.danger { color: var(--danger); }
+.menu button.rich { display: flex; align-items: center; gap: 12px; }
+.menu button.rich svg { width: 20px; height: 20px; color: var(--muted); flex: none; }
+.menu button.rich .ml { flex: 1; }
+.menu button.rich .mc { color: var(--faint, #6A6E75); font-size: 14px; }
+.menu .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: transparent; }
+.menu .dot.on { background: #5BC27A; box-shadow: 0 0 0 3px rgba(91, 194, 122, 0.18); }
+.menu-sep { height: 1px; background: rgba(255, 255, 255, 0.08); margin: 4px 8px; }
 
 .toast {
   position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom) + 96px);
