@@ -59,6 +59,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -81,6 +82,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
@@ -111,6 +114,37 @@ class MainActivity : ComponentActivity() {
 // ---------------------------------------------------------------------------
 
 private val Teal = Color(0xFF1F4E5F)
+
+/**
+ * Notepad-style monospace font. Windows Notepad uses Consolas, which can't be bundled
+ * in an app, so this uses Inconsolata (SIL Open Font License), designed after Consolas.
+ */
+private val NotepadFont = FontFamily(
+    Font(R.font.inconsolata_regular, FontWeight.Normal),
+    Font(R.font.inconsolata_medium, FontWeight.Medium),
+    Font(R.font.inconsolata_semibold, FontWeight.SemiBold),
+    Font(R.font.inconsolata_bold, FontWeight.Bold),
+)
+
+private val AppTypography = Typography().let { t ->
+    Typography(
+        displayLarge = t.displayLarge.copy(fontFamily = NotepadFont),
+        displayMedium = t.displayMedium.copy(fontFamily = NotepadFont),
+        displaySmall = t.displaySmall.copy(fontFamily = NotepadFont),
+        headlineLarge = t.headlineLarge.copy(fontFamily = NotepadFont),
+        headlineMedium = t.headlineMedium.copy(fontFamily = NotepadFont),
+        headlineSmall = t.headlineSmall.copy(fontFamily = NotepadFont),
+        titleLarge = t.titleLarge.copy(fontFamily = NotepadFont),
+        titleMedium = t.titleMedium.copy(fontFamily = NotepadFont),
+        titleSmall = t.titleSmall.copy(fontFamily = NotepadFont),
+        bodyLarge = t.bodyLarge.copy(fontFamily = NotepadFont),
+        bodyMedium = t.bodyMedium.copy(fontFamily = NotepadFont),
+        bodySmall = t.bodySmall.copy(fontFamily = NotepadFont),
+        labelLarge = t.labelLarge.copy(fontFamily = NotepadFont),
+        labelMedium = t.labelMedium.copy(fontFamily = NotepadFont),
+        labelSmall = t.labelSmall.copy(fontFamily = NotepadFont),
+    )
+}
 private val Amber = Color(0xFFE09A3E)
 
 @Composable
@@ -134,7 +168,7 @@ fun InventoryTheme(content: @Composable () -> Unit) {
             surface = Color(0xFFF6F7F8),
         )
     }
-    MaterialTheme(colorScheme = scheme, content = content)
+    MaterialTheme(colorScheme = scheme, typography = AppTypography, content = content)
 }
 
 // ---------------------------------------------------------------------------
