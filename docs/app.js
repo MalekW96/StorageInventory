@@ -2,8 +2,8 @@
  * Everything is stored on the device (IndexedDB). No account, no server. */
 'use strict';
 
-const APP_VERSION = '2.1.1.0';
-const APP_BUILD = 2; // bumped for updates published under the same version number
+const APP_VERSION = '2.1.1.1';
+const APP_BUILD = 1; // bumped for updates published under the same version number
 
 // ===========================================================================
 // Small helpers
@@ -717,6 +717,7 @@ function endSelect(rerender = true) { state.selecting = false; state.selected.cl
 function toggleSelect(id) {
   state.selecting = true;
   if (state.selected.has(id)) state.selected.delete(id); else state.selected.add(id);
+  if (!state.selected.size) state.selecting = false;
   render();
 }
 /** Archived bins can't be opened; their contents can still be looked at from search. */
@@ -779,11 +780,12 @@ function nodeRow(node, detail, { score, tag, select } = {}) {
   const thumb = mainPhoto(node)
     ? `<img class="thumb" data-photo="${esc(mainPhoto(node))}" alt="">`
     : badge(node);
-  const row = `<div class="row clickable" data-open="${esc(node.id)}">
-    ${thumb}
+  const tick = select ? `<button class="check${select === 'on' ? ' on' : ''}" data-select="${esc(node.id)}" aria-label="Select ${esc(node.name)}">${ICON.check}</button>` : '';
+  const row = `<div class="row clickable${select ? ' has-check' : ''}" data-open="${esc(node.id)}">
+    ${tick}${thumb}
     <div class="main"><div class="name">${esc(node.name)}</div><div class="detail">${tag ? `<span class="tag">${esc(tag)}</span>` : ''}${esc(detail)}</div></div>
     ${score != null ? `<span class="score">${Math.round(score * 100)}%</span>`
-      : select ? `<span class="check${select === 'on' ? ' on' : ''}">${ICON.check}</span>` : `<span class="chev">${ICON.chev}</span>`}
+      : `<span class="chev">${ICON.chev}</span>`}
   </div>`;
   if (score != null) return `<div class="card">${row}</div>`;
   return `<div class="swipe${select === 'on' ? ' selected' : ''}" data-swipe="${esc(node.id)}">
@@ -846,17 +848,17 @@ function renderHome() {
   let body;
   if (!storages.length) {
     const [icon, h, p] = arch
-      ? [ICON.archive, 'No archived bins', 'To archive a bin, swipe it left › More › Archive.']
+      ? [ICON.archive, 'No archived bins', 'To archive bins: in Active storage tick their circles, then ☰ › Archive.']
       : Store.storages().length
         ? [ICON.box, 'No active bins', 'Tap “New Bin” to add one. Archived bins are under ☰ › Archived storage.']
         : [ICON.box, 'No Storage Data Available', 'Tap “New Bin” to add your first one.'];
     body = `<div class="empty"><div class="empty-icon">${icon}</div><h2>${h}</h2><p>${esc(p)}</p></div>`;
   } else {
-    const hint = sel ? (arch ? 'Tap bins to select them, then ☰ › Unarchive' : 'Tap bins to select them, then ☰ › Archive')
-      : arch ? 'Archived bins can’t be opened. Tap to select, then ☰ › Unarchive'
-      : 'Swipe left for options · press and hold to select';
+    const hint = arch ? 'Tick bins, then ☰ › Unarchive. Archived bins can’t be opened.'
+      : sel ? 'Tick the bins to archive, then ☰ › Archive'
+      : 'Tick a bin’s circle to select it · swipe left for options';
     body = `<div class="label">${arch ? 'Archived · ' : ''}${plural(storages.length, 'bin')}</div><div class="list">${storages.map((s) =>
-      nodeRow(s, countText(Store.countInside(s.id)), { tag: s.qr ? null : 'Temporary', select: sel ? (state.selected.has(s.id) ? 'on' : 'off') : null })).join('')}</div>` +
+      nodeRow(s, countText(Store.countInside(s.id)), { tag: s.qr ? null : 'Temporary', select: state.selected.has(s.id) ? 'on' : 'off' })).join('')}</div>` +
       `<p class="swipe-hint">${esc(hint)}</p>`;
   }
   const title = sel ? (state.selected.size ? `${state.selected.size} selected` : 'Select bins') : arch ? 'Archived storage' : 'Storage Inventory';
@@ -1721,6 +1723,8 @@ document.addEventListener('click', (e) => {
     if (n) photoViewer(photosOf(n), Number(viewNode.dataset.index || 0), n.id);
     return;
   }
+  const tickBtn = t.closest('#app [data-select]');
+  if (tickBtn) { closeSwipe(); return toggleSelect(tickBtn.dataset.select); }
   const open = t.closest('#app [data-open]');
   if (open) {
     const node = Store.get(open.dataset.open);

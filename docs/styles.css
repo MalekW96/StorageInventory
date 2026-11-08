@@ -96,9 +96,12 @@ button { cursor: pointer; }
 .row .detail { font-size: 14px; color: var(--muted); margin-top: 1px; }
 .row .score { font-weight: 600; color: var(--brass); padding-right: 4px; font-variant-numeric: tabular-nums; }
 .row .check {
-  width: 24px; height: 24px; flex: none; border-radius: 50%; display: grid; place-items: center;
-  border: 1.6px solid var(--faint, #6A6E75); color: transparent; transition: background .12s, border-color .12s;
+  width: 26px; height: 26px; flex: none; border-radius: 50%; display: grid; place-items: center; padding: 0;
+  border: 1.8px solid var(--faint, #6A6E75); background: transparent; color: transparent; transition: background .12s, border-color .12s;
+  position: relative; margin-left: 2px;
 }
+.row .check::before { content: ''; position: absolute; inset: -12px; } /* bigger tap target */
+.row.has-check { gap: 12px; padding-left: 12px; }
 .row .check svg { width: 15px; height: 15px; }
 .row .check.on { background: var(--brass); border-color: var(--brass); color: var(--brass-ink, #1A1407); }
 .swipe.selected .row { background: var(--surface-2); box-shadow: inset 0 0 0 1.5px rgba(201, 163, 93, 0.55); }

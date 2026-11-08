@@ -1,6 +1,6 @@
 {
-  "versionCode": 10,
-  "versionName": "2.1.1.0",
-  "apkUrl": "https://github.com/MalekW96/StorageInventory/releases/download/v2.1.1.0/StorageInventory.apk",
-  "notes": "Select bins: press and hold a bin (or ☰ › Select bins), tap more to tick them, then ☰ › Archive. In Archived storage, tap bins to select them, then ☰ › Unarchive. Archived bins can’t be opened, but search (by words, photo or QR code) still finds what’s inside them. “New Bin” now has a capital B."
+  "versionCode": 11,
+  "versionName": "2.1.1.1",
+  "apkUrl": "https://github.com/MalekW96/StorageInventory/releases/download/v2.1.1.1/StorageInventory.apk",
+  "notes": "Select bins right from the main page: every bin has a tick circle on its left. Tick the bins you want, then ☰ › Archive — the whole bin and everything in it is archived. In Archived storage, tick bins and use ☰ › Unarchive. Tapping the rest of a row still opens the bin."
 }

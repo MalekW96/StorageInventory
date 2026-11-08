@@ -494,6 +494,7 @@ fun InventoryApp(store: InventoryStore) {
                     if (!selecting) ActivityLog.log("Started selecting", "“${node.name}”")
                     selecting = true
                     if (node.id in selected) selected.remove(node.id) else selected.add(node.id)
+                    if (selected.isEmpty()) endSelect()
                 },
                 onStartSelect = { selecting = true },
                 onCancelSelect = { endSelect() },
@@ -980,7 +981,7 @@ private fun HomeScreen(
             when {
                 archivedView -> EmptyState(
                     title = "No archived bins",
-                    hint = "To archive bins: press and hold one in Active storage, select the bins, then ☰ › Archive.",
+                    hint = "To archive bins: in Active storage tick their circles, then ☰ › Archive.",
                     modifier = Modifier.padding(padding),
                 )
                 store.storages().isNotEmpty() -> EmptyState(
@@ -1013,7 +1014,9 @@ private fun HomeScreen(
                         node = storage,
                         detail = countText(items, containers),
                         tag = if (storage.isTemporary) "Temporary" else null,
-                        selectState = if (selectMode) storage.id in chosen else null,
+                        selectState = storage.id in chosen,
+                        onSelect = { onToggleSelect(storage) },
+                        swipeEnabled = !selectMode,
                         onClick = { if (selectMode || archivedView) onToggleSelect(storage) else onOpen(storage) },
                         onLongClick = { onToggleSelect(storage) },
                         onMore = { onOptions(storage) },
@@ -1023,10 +1026,9 @@ private fun HomeScreen(
                 item {
                     SwipeHint(
                         when {
-                            selectMode && archivedView -> "Tap bins to select them, then ☰ › Unarchive"
-                            selectMode -> "Tap bins to select them, then ☰ › Archive"
-                            archivedView -> "Archived bins can’t be opened. Tap to select, then ☰ › Unarchive"
-                            else -> "Swipe left for options · press and hold to select"
+                            archivedView -> "Tick bins, then ☰ › Unarchive. Archived bins can’t be opened."
+                            selectMode -> "Tick the bins to archive, then ☰ › Archive"
+                            else -> "Tick a bin’s circle to select it · swipe left for options"
                         }
                     )
                 }
@@ -1520,6 +1522,8 @@ private fun NodeRow(
     detail: String,
     tag: String? = null,
     selectState: Boolean? = null,
+    onSelect: () -> Unit = {},
+    swipeEnabled: Boolean = true,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
     onMore: () -> Unit,
@@ -1528,7 +1532,7 @@ private fun NodeRow(
     SwipeRow(
         onClick = onClick,
         onLongClick = onLongClick,
-        swipeEnabled = selectState == null,
+        swipeEnabled = swipeEnabled,
         selected = selectState == true,
         onMore = onMore,
         onDelete = onDelete,
@@ -1537,9 +1541,20 @@ private fun NodeRow(
             Modifier
                 .fillMaxWidth()
                 .background(if (selectState == true) Surface2 else Surface1)
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .padding(start = if (selectState != null) 4.dp else 14.dp, end = 14.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (selectState != null) {
+                // Tick circle: selects the whole bin (tapping the rest of the row opens it).
+                Box(
+                    Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = onSelect),
+                    contentAlignment = Alignment.Center,
+                ) { CheckCircle(selectState) }
+                Spacer(Modifier.width(4.dp))
+            }
             Thumb(node, 56.dp)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
@@ -1558,8 +1573,7 @@ private fun NodeRow(
                     Text(detail, style = MaterialTheme.typography.bodyMedium, color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            if (selectState != null) CheckCircle(selectState)
-            else Icon(painterResource(R.drawable.ic_chevron), contentDescription = null, tint = TextFaint, modifier = Modifier.size(18.dp))
+            Icon(painterResource(R.drawable.ic_chevron), contentDescription = null, tint = TextFaint, modifier = Modifier.size(18.dp))
         }
     }
 }
