@@ -1,11 +1,11 @@
 /* Service worker: makes the app work offline and lets "Check for updates" install new versions. */
-const VERSION = '1.4.2.1';
+const VERSION = '2.0.0.0';
 const CACHE = 'si-' + VERSION;
 const MODELS = 'si-models';
 const SHELL = [
   './', 'index.html', 'app.js', 'styles.css', 'manifest.webmanifest',
   'vendor/jsQR.js',
-  'fonts/inconsolata-regular.woff2', 'fonts/inconsolata-semibold.woff2', 'fonts/inconsolata-bold.woff2',
+  'fonts/geist-regular.woff2', 'fonts/geist-medium.woff2', 'fonts/geist-semibold.woff2', 'fonts/geist-bold.woff2',
   'icons/apple-touch-icon.png', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
 

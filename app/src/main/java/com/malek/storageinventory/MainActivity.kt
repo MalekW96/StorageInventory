@@ -106,6 +106,30 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import androidx.compose.animation.core.Animatable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material3.FabPosition
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -113,7 +137,10 @@ import java.util.Locale
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT))
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+        )
         ActivityLog.init(applicationContext)
         val store = InventoryStore(applicationContext)
         setContent {
@@ -128,61 +155,73 @@ class MainActivity : ComponentActivity() {
 // Theme
 // ---------------------------------------------------------------------------
 
-private val Teal = Color(0xFF1F4E5F)
+// Premium dark palette
+private val Bg = Color(0xFF0D0E10)
+private val Surface1 = Color(0xFF17191C)
+private val Surface2 = Color(0xFF202327)
+private val Surface3 = Color(0xFF2A2E33)
+private val TextHi = Color(0xFFEDEBE7)
+private val TextMuted = Color(0xFF9A9DA3)
+private val TextFaint = Color(0xFF6A6E75)
+private val Brass = Color(0xFFC9A35D)
+private val BrassHi = Color(0xFFE2C27F)
+private val BrassInk = Color(0xFF1A1407)
+private val Danger = Color(0xFFE8735E)
 
-/**
- * Notepad-style monospace font. Windows Notepad uses Consolas, which can't be bundled
- * in an app, so this uses Inconsolata (SIL Open Font License), designed after Consolas.
- */
-private val NotepadFont = FontFamily(
-    Font(R.font.inconsolata_regular, FontWeight.Normal),
-    Font(R.font.inconsolata_medium, FontWeight.Medium),
-    Font(R.font.inconsolata_semibold, FontWeight.SemiBold),
-    Font(R.font.inconsolata_bold, FontWeight.Bold),
+/** Geist (SIL Open Font License) by Vercel. */
+private val Geist = FontFamily(
+    Font(R.font.geist_regular, FontWeight.Normal),
+    Font(R.font.geist_medium, FontWeight.Medium),
+    Font(R.font.geist_semibold, FontWeight.SemiBold),
+    Font(R.font.geist_bold, FontWeight.Bold),
 )
 
 private val AppTypography = Typography().let { t ->
     Typography(
-        displayLarge = t.displayLarge.copy(fontFamily = NotepadFont),
-        displayMedium = t.displayMedium.copy(fontFamily = NotepadFont),
-        displaySmall = t.displaySmall.copy(fontFamily = NotepadFont),
-        headlineLarge = t.headlineLarge.copy(fontFamily = NotepadFont),
-        headlineMedium = t.headlineMedium.copy(fontFamily = NotepadFont),
-        headlineSmall = t.headlineSmall.copy(fontFamily = NotepadFont),
-        titleLarge = t.titleLarge.copy(fontFamily = NotepadFont),
-        titleMedium = t.titleMedium.copy(fontFamily = NotepadFont),
-        titleSmall = t.titleSmall.copy(fontFamily = NotepadFont),
-        bodyLarge = t.bodyLarge.copy(fontFamily = NotepadFont),
-        bodyMedium = t.bodyMedium.copy(fontFamily = NotepadFont),
-        bodySmall = t.bodySmall.copy(fontFamily = NotepadFont),
-        labelLarge = t.labelLarge.copy(fontFamily = NotepadFont),
-        labelMedium = t.labelMedium.copy(fontFamily = NotepadFont),
-        labelSmall = t.labelSmall.copy(fontFamily = NotepadFont),
+        displayLarge = t.displayLarge.copy(fontFamily = Geist),
+        displayMedium = t.displayMedium.copy(fontFamily = Geist),
+        displaySmall = t.displaySmall.copy(fontFamily = Geist),
+        headlineLarge = t.headlineLarge.copy(fontFamily = Geist, letterSpacing = (-0.8).sp),
+        headlineMedium = t.headlineMedium.copy(fontFamily = Geist, letterSpacing = (-0.7).sp),
+        headlineSmall = t.headlineSmall.copy(fontFamily = Geist, letterSpacing = (-0.5).sp),
+        titleLarge = t.titleLarge.copy(fontFamily = Geist, letterSpacing = (-0.4).sp),
+        titleMedium = t.titleMedium.copy(fontFamily = Geist, letterSpacing = (-0.15).sp),
+        titleSmall = t.titleSmall.copy(fontFamily = Geist),
+        bodyLarge = t.bodyLarge.copy(fontFamily = Geist),
+        bodyMedium = t.bodyMedium.copy(fontFamily = Geist),
+        bodySmall = t.bodySmall.copy(fontFamily = Geist),
+        labelLarge = t.labelLarge.copy(fontFamily = Geist),
+        labelMedium = t.labelMedium.copy(fontFamily = Geist),
+        labelSmall = t.labelSmall.copy(fontFamily = Geist),
     )
 }
-private val Amber = Color(0xFFE09A3E)
 
 @Composable
 fun InventoryTheme(content: @Composable () -> Unit) {
-    val scheme = if (isSystemInDarkTheme()) {
-        darkColorScheme(
-            primary = Color(0xFF8CCFE3),
-            onPrimary = Color(0xFF00363F),
-            secondary = Color(0xFFF2B35B),
-            primaryContainer = Teal,
-            onPrimaryContainer = Color.White,
-        )
-    } else {
-        lightColorScheme(
-            primary = Teal,
-            onPrimary = Color.White,
-            secondary = Amber,
-            primaryContainer = Teal,
-            onPrimaryContainer = Color.White,
-            background = Color(0xFFF6F7F8),
-            surface = Color(0xFFF6F7F8),
-        )
-    }
+    val scheme = darkColorScheme(
+        primary = Brass,
+        onPrimary = BrassInk,
+        primaryContainer = Surface3,
+        onPrimaryContainer = TextHi,
+        secondary = Brass,
+        onSecondary = BrassInk,
+        background = Bg,
+        onBackground = TextHi,
+        surface = Surface1,
+        onSurface = TextHi,
+        surfaceVariant = Surface2,
+        onSurfaceVariant = TextMuted,
+        surfaceTint = Color.Transparent,
+        surfaceContainerLowest = Surface1,
+        surfaceContainerLow = Surface1,
+        surfaceContainer = Surface1,
+        surfaceContainerHigh = Surface1,
+        surfaceContainerHighest = Surface2,
+        outline = TextFaint,
+        outlineVariant = Color(0x14FFFFFF),
+        error = Danger,
+        onError = Color(0xFF1B0B07),
+    )
     MaterialTheme(colorScheme = scheme, typography = AppTypography, content = content)
 }
 
@@ -253,6 +292,9 @@ fun InventoryApp(store: InventoryStore) {
     var viewer by remember { mutableStateOf<ViewerState?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
     var infoFor by remember { mutableStateOf<String?>(null) }
+    var optionsFor by remember { mutableStateOf<String?>(null) }
+    var showNewBin by remember { mutableStateOf(false) }
+    var addItemFor by remember { mutableStateOf<String?>(null) }
 
     // --- Photos -------------------------------------------------------------
     // captureTarget says what the photo being taken is for:
@@ -419,35 +461,25 @@ fun InventoryApp(store: InventoryStore) {
             )
             current == null -> HomeScreen(
                 store = store,
-                onAddByPhoto = { photoItemTarget = null; takePhoto("P") },
-                onAdd = { scanMode = ScanMode.NewStorage },
-                onAddTemporary = { creatingTemp = true },
+                onNewBin = { showNewBin = true },
                 onFind = { showSearch = true },
-                onAssignQr = { scanMode = ScanMode.AssignQr(it.id) },
-                onExport = { exportStorage(it) },
                 onSettings = { showSettings = true },
                 onOpen = { stack.add(it.id) },
-                onRename = { renaming = it },
+                onOptions = { optionsFor = it.id },
                 onDelete = { deleting = it },
-                onPhoto = { takePhoto("N$SEP${it.id}") },
-                onInfo = { infoFor = it.id },
             )
             else -> DetailScreen(
                 store = store,
                 node = current,
                 onBack = { stack.removeAt(stack.lastIndex) },
-                onScanAdd = { scanMode = ScanMode.AddTo(current.id) },
-                onPhotoAdd = { photoItemTarget = current.id; takePhoto("P") },
-                onAssignQr = { scanMode = ScanMode.AssignQr(it.id) },
-                onExport = { exportStorage(it) },
+                onAddItem = { addItemFor = current.id },
                 onOpen = { child ->
                     if (child.canHoldChildren) stack.add(child.id) else viewingItem = child.id
                 },
-                onRename = { renaming = it },
+                onOptions = { optionsFor = it.id },
                 onDelete = { deleting = it },
                 onPhoto = { takePhoto("N$SEP${it.id}") },
                 onViewPhoto = { node, index -> viewer = ViewerState(node.photoPaths, index, node.id) },
-                onInfo = { infoFor = it.id },
             )
         }
 
@@ -512,10 +544,11 @@ fun InventoryApp(store: InventoryStore) {
     val pendingStorage = decodePending(pendingStorageRaw)
     if (pendingStorage != null) {
         NameDialog(
-            title = "Name this storage",
+            title = "Name this bin",
             message = "QR code: ${pendingStorage.qr}",
-            label = "Storage name",
+            label = "Bin name",
             confirmText = "Done",
+            initial = remember(pendingStorage.qr) { nextBinName(store) },
             photoPaths = pendingStorage.photos,
             onTakePhoto = { takePhoto("S$SEP${pendingStorage.qr}") },
             onRemovePhoto = { pendingStorageRaw = removePendingPhoto(pendingStorageRaw, it) },
@@ -572,10 +605,11 @@ fun InventoryApp(store: InventoryStore) {
     // Temporary storage (no QR code yet)
     if (creatingTemp) {
         NameDialog(
-            title = "Create temporary storage",
-            message = "No QR code needed. You can attach one later with “Assign QR code” in its ⋮ menu.",
-            label = "Storage name",
+            title = "New temporary bin",
+            message = "No QR code needed. Attach one later: swipe the bin left › More › Assign QR code.",
+            label = "Bin name",
             confirmText = "Create",
+            initial = remember { nextBinName(store) },
             photoPaths = splitPhotos(tempPhotosRaw),
             onTakePhoto = { takePhoto("T") },
             onRemovePhoto = { path ->
@@ -665,6 +699,61 @@ fun InventoryApp(store: InventoryStore) {
                 onDelete = { viewingItem = null; deleting = item },
                 onInfo = { infoFor = item.id },
                 onDismiss = { viewingItem = null },
+            )
+        }
+    }
+
+    // Action sheets (replace the old three-dot menus)
+    if (showNewBin) {
+        ActionSheet(
+            title = "New bin",
+            subtitle = null,
+            actions = listOf(
+                SheetAction(R.drawable.ic_qr, "Scan bin QR code", "Then photograph the bin and name it") { scanMode = ScanMode.NewStorage },
+                SheetAction(R.drawable.ic_clock, "Temporary bin", "No QR code yet, attach one later") { creatingTemp = true },
+                SheetAction(
+                    R.drawable.ic_camera, "Add item to an existing bin", "Take a photo, then pick the bin",
+                    enabled = store.nodes.any { it.canHoldChildren },
+                ) { photoItemTarget = null; takePhoto("P") },
+            ),
+            onDismiss = { showNewBin = false },
+        )
+    }
+    addItemFor?.let { id ->
+        val parent = store.get(id)
+        if (parent == null) { addItemFor = null; return@let }
+        ActionSheet(
+            title = "Add item",
+            subtitle = "To “${parent.name}”",
+            actions = listOf(
+                SheetAction(R.drawable.ic_camera, "Add by photo", "Photos only, no QR label") {
+                    photoItemTarget = parent.id; takePhoto("P")
+                },
+                SheetAction(R.drawable.ic_qr, "Add with QR code + photo", "Scan the label, then photograph it") {
+                    scanMode = ScanMode.AddTo(parent.id)
+                },
+            ),
+            onDismiss = { addItemFor = null },
+        )
+    }
+    optionsFor?.let { id ->
+        val node = store.get(id)
+        LaunchedEffect(id) { node?.let { ActivityLog.log("Opened options", "“${it.name}”") } }
+        if (node == null) { optionsFor = null; return@let }
+        run {
+            val where = store.path(node.id).dropLast(1).joinToString(" › ") { it.name }
+            ActionSheet(
+                title = node.name,
+                subtitle = (if (node.isTemporary) "Temporary storage" else typeLabel(node.type)) + (if (where.isNotEmpty()) " · $where" else ""),
+                actions = listOfNotNull(
+                    SheetAction(R.drawable.ic_info, "Info", "Date added, location, QR code") { infoFor = node.id },
+                    SheetAction(R.drawable.ic_camera, "Add photo") { takePhoto("N$SEP${node.id}") },
+                    if (!node.hasQr) SheetAction(R.drawable.ic_qr, "Assign QR code") { scanMode = ScanMode.AssignQr(node.id) } else null,
+                    if (node.canHoldChildren) SheetAction(R.drawable.ic_table, "Export to Excel") { exportStorage(node) } else null,
+                    SheetAction(R.drawable.ic_pencil, "Rename") { renaming = node },
+                    SheetAction(R.drawable.ic_trash, "Delete", danger = true) { deleting = node },
+                ),
+                onDismiss = { optionsFor = null },
             )
         }
     }
@@ -773,88 +862,66 @@ fun InventoryApp(store: InventoryStore) {
 @Composable
 private fun HomeScreen(
     store: InventoryStore,
-    onAddByPhoto: () -> Unit,
-    onAdd: () -> Unit,
-    onAddTemporary: () -> Unit,
+    onNewBin: () -> Unit,
     onFind: () -> Unit,
-    onAssignQr: (Node) -> Unit,
-    onExport: (Node) -> Unit,
     onSettings: () -> Unit,
     onOpen: (Node) -> Unit,
-    onRename: (Node) -> Unit,
+    onOptions: (Node) -> Unit,
     onDelete: (Node) -> Unit,
-    onPhoto: (Node) -> Unit,
-    onInfo: (Node) -> Unit,
 ) {
     val storages = store.storages()
     Scaffold(
+        containerColor = Bg,
         topBar = {
             TopAppBar(
-                title = { Text("Storage Inventory", fontWeight = FontWeight.SemiBold) },
+                title = {
+                    Text(
+                        "Storage Inventory",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
                 colors = barColors(),
                 actions = {
-                    if (storages.isNotEmpty()) {
-                        IconButton(onClick = onFind) {
-                            Icon(Icons.Filled.Search, contentDescription = "Search")
-                        }
-                    }
-                    var addMenu by remember { mutableStateOf(false) }
-                    Box {
-                        IconButton(onClick = { addMenu = true }) {
-                            Icon(Icons.Filled.Add, contentDescription = "Add")
-                        }
-                        DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Take photo to add to existing storage") },
-                                enabled = storages.isNotEmpty(),
-                                onClick = { addMenu = false; onAddByPhoto() },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Add new storage (scan QR code)") },
-                                onClick = { addMenu = false; onAdd() },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Create temporary storage") },
-                                onClick = { addMenu = false; onAddTemporary() },
-                            )
-                        }
-                    }
-                    IconButton(onClick = onSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = "Settings and updates")
-                    }
+                    if (store.nodes.isNotEmpty()) RoundIconButton(Icons.Filled.Search, "Search", onFind)
+                    RoundIconButton(Icons.Filled.Settings, "Settings and updates", onSettings)
+                    Spacer(Modifier.width(8.dp))
                 },
             )
         },
+        floatingActionButton = { BrassButton("New bin", onNewBin) },
+        floatingActionButtonPosition = FabPosition.Center,
     ) { padding ->
         if (storages.isEmpty()) {
             EmptyState(
                 title = "No Storage Data Available",
-                hint = "Tap + in the top right corner to add a storage.",
+                hint = "Tap “New bin” to add your first one.",
                 modifier = Modifier.padding(padding),
             )
         } else {
             LazyColumn(
                 contentPadding = PaddingValues(
                     start = 16.dp, end = 16.dp,
-                    top = padding.calculateTopPadding() + 12.dp,
-                    bottom = padding.calculateBottomPadding() + 24.dp,
+                    top = padding.calculateTopPadding() + 4.dp,
+                    bottom = padding.calculateBottomPadding() + 110.dp,
                 ),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                item { SectionLabel(if (storages.size == 1) "1 bin" else "${storages.size} bins") }
                 items(storages, key = { it.id }) { storage ->
                     val (items, containers) = store.countInside(storage.id)
                     NodeRow(
                         node = storage,
-                        detail = (if (storage.isTemporary) "Temporary · " else "") + countText(items, containers),
+                        detail = countText(items, containers),
+                        tag = if (storage.isTemporary) "Temporary" else null,
                         onClick = { onOpen(storage) },
-                        onRename = { onRename(storage) },
+                        onMore = { onOptions(storage) },
                         onDelete = { onDelete(storage) },
-                        onPhoto = { onPhoto(storage) },
-                        onInfo = { onInfo(storage) },
-                        onAssignQr = { onAssignQr(storage) },
-                        onExport = { onExport(storage) },
                     )
                 }
+                item { SwipeHint() }
             }
         }
     }
@@ -866,20 +933,17 @@ private fun DetailScreen(
     store: InventoryStore,
     node: Node,
     onBack: () -> Unit,
-    onScanAdd: () -> Unit,
-    onPhotoAdd: () -> Unit,
-    onAssignQr: (Node) -> Unit,
-    onExport: (Node) -> Unit,
+    onAddItem: () -> Unit,
     onOpen: (Node) -> Unit,
-    onRename: (Node) -> Unit,
+    onOptions: (Node) -> Unit,
     onDelete: (Node) -> Unit,
     onPhoto: (Node) -> Unit,
     onViewPhoto: (Node, Int) -> Unit,
-    onInfo: (Node) -> Unit,
 ) {
     val children = store.children(node.id)
     val path = store.path(node.id)
     Scaffold(
+        containerColor = Bg,
         topBar = {
             TopAppBar(
                 navigationIcon = {
@@ -889,7 +953,13 @@ private fun DetailScreen(
                 },
                 title = {
                     Column {
-                        Text(node.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            node.name,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                         val crumbs = if (path.size > 1) path.dropLast(1).joinToString(" › ") { it.name }
                         else if (node.isTemporary) "Temporary storage" else typeLabel(node.type)
                         Text(
@@ -897,52 +967,25 @@ private fun DetailScreen(
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            color = Color.White.copy(alpha = 0.75f),
+                            color = TextMuted,
                         )
                     }
                 },
                 actions = {
-                    OverflowMenu(
-                        hasPhoto = node.photoPath != null,
-                        onRename = { onRename(node) },
-                        onDelete = { onDelete(node) },
-                        onPhoto = { onPhoto(node) },
-                        onInfo = { onInfo(node) },
-                        onAssignQr = if (node.hasQr) null else ({ onAssignQr(node) }),
-                        onExport = { onExport(node) },
-                    )
+                    RoundIconButton(painterResource(R.drawable.ic_dots), "Options") { onOptions(node) }
+                    Spacer(Modifier.width(8.dp))
                 },
                 colors = barColors(),
             )
         },
-        floatingActionButton = {
-            var addOpen by remember { mutableStateOf(false) }
-            Box {
-                ExtendedFloatingActionButton(
-                    onClick = { addOpen = true },
-                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                    text = { Text("Add") },
-                    containerColor = MaterialTheme.colorScheme.secondary,
-                    contentColor = Color(0xFF2B1A00),
-                )
-                DropdownMenu(expanded = addOpen, onDismissRequest = { addOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text("Add by photo") },
-                        onClick = { addOpen = false; onPhotoAdd() },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Add with QR code + photo") },
-                        onClick = { addOpen = false; onScanAdd() },
-                    )
-                }
-            }
-        },
+        floatingActionButton = { BrassButton("Add item", onAddItem) },
+        floatingActionButtonPosition = FabPosition.Center,
     ) { padding ->
         LazyColumn(
             contentPadding = PaddingValues(
                 start = 16.dp, end = 16.dp,
-                top = padding.calculateTopPadding() + 12.dp,
-                bottom = padding.calculateBottomPadding() + 96.dp,
+                top = padding.calculateTopPadding() + 4.dp,
+                bottom = padding.calculateBottomPadding() + 110.dp,
             ),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -957,10 +1000,10 @@ private fun DetailScreen(
             if (children.isEmpty()) {
                 item {
                     Text(
-                        "No items yet. Press + to start adding.",
+                        "No items yet. Tap “Add item” to start adding.",
                         style = MaterialTheme.typography.bodyMedium,
                         textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = TextMuted,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 32.dp),
@@ -969,12 +1012,7 @@ private fun DetailScreen(
             } else {
                 item {
                     val (items, containers) = store.countInside(node.id)
-                    Text(
-                        "Total inside: ${countText(items, containers)}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 4.dp, top = 4.dp, bottom = 2.dp),
-                    )
+                    SectionLabel("Inside · ${countText(items, containers)}")
                 }
                 items(children, key = { it.id }) { child ->
                     val detail = if (child.canHoldChildren) {
@@ -986,14 +1024,11 @@ private fun DetailScreen(
                         node = child,
                         detail = if (photos > 1) "$detail · $photos photos" else detail,
                         onClick = { onOpen(child) },
-                        onRename = { onRename(child) },
+                        onMore = { onOptions(child) },
                         onDelete = { onDelete(child) },
-                        onPhoto = { onPhoto(child) },
-                        onInfo = { onInfo(child) },
-                        onAssignQr = { onAssignQr(child) },
-                        onExport = { onExport(child) },
                     )
                 }
+                item { SwipeHint() }
             }
         }
     }
@@ -1254,7 +1289,6 @@ private fun SettingsCard(title: String, content: @Composable () -> Unit) {
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(Modifier.padding(16.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -1271,10 +1305,11 @@ private fun SettingsCard(title: String, content: @Composable () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun barColors() = TopAppBarDefaults.topAppBarColors(
-    containerColor = Teal,
-    titleContentColor = Color.White,
-    navigationIconContentColor = Color.White,
-    actionIconContentColor = Color.White,
+    containerColor = Bg,
+    scrolledContainerColor = Bg,
+    titleContentColor = TextHi,
+    navigationIconContentColor = TextHi,
+    actionIconContentColor = TextHi,
 )
 
 @Composable
@@ -1286,6 +1321,8 @@ private fun EmptyState(title: String, hint: String, modifier: Modifier = Modifie
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        BoxPlaceholder(72.dp)
+        Spacer(Modifier.height(18.dp))
         Text(
             title,
             style = MaterialTheme.typography.titleLarge,
@@ -1351,8 +1388,7 @@ private fun PhotoHeader(
             modifier = Modifier.fillMaxWidth(),
             shape = shape,
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        ) {
+            ) {
             Row(
                 Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1373,86 +1409,256 @@ private fun PhotoHeader(
 private fun NodeRow(
     node: Node,
     detail: String,
+    tag: String? = null,
     onClick: () -> Unit,
-    onRename: () -> Unit,
+    onMore: () -> Unit,
     onDelete: () -> Unit,
-    onPhoto: () -> Unit,
-    onInfo: () -> Unit,
-    onAssignQr: () -> Unit,
-    onExport: () -> Unit,
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
+    SwipeRow(onClick = onClick, onMore = onMore, onDelete = onDelete) {
         Row(
-            Modifier.padding(start = 12.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+            Modifier
+                .fillMaxWidth()
+                .background(Surface1)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box {
-                val mainPhoto = node.photoPath
-                if (mainPhoto != null) {
-                    PhotoImage(
-                        path = mainPhoto,
-                        maxPx = 200,
-                        modifier = Modifier
-                            .size(56.dp)
-                            .clip(RoundedCornerShape(10.dp)),
-                    )
-                    Box(Modifier.align(Alignment.BottomEnd).padding(2.dp)) {
-                        TypeBadge(node.type, small = true)
-                    }
-                } else {
-                    Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) { TypeBadge(node.type) }
-                }
-            }
-            Spacer(Modifier.width(12.dp))
+            Thumb(node, 56.dp)
+            Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     node.name,
                     style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    detail,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (tag != null) {
+                        Tag(tag)
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(detail, style = MaterialTheme.typography.bodyMedium, color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
-            OverflowMenu(
-                hasPhoto = node.photoPath != null,
-                onRename = onRename,
-                onDelete = onDelete,
-                onPhoto = onPhoto,
-                onInfo = onInfo,
-                onAssignQr = if (node.hasQr) null else onAssignQr,
-                onExport = if (node.canHoldChildren) onExport else null,
-            )
+            Icon(painterResource(R.drawable.ic_chevron), contentDescription = null, tint = TextFaint, modifier = Modifier.size(18.dp))
         }
     }
 }
 
+/** Row that slides left to reveal More and Delete. */
 @Composable
-private fun TypeBadge(type: NodeType, small: Boolean = false) {
-    val (letter, bg, fg) = when (type) {
-        NodeType.STORAGE -> Triple("S", Teal, Color.White)
-        NodeType.CONTAINER -> Triple("C", Color(0xFFF2B35B), Color(0xFF3A2500))
-        NodeType.ITEM -> Triple("I", Color(0xFFDDE5E8), Teal)
+private fun SwipeRow(
+    onClick: () -> Unit,
+    onMore: () -> Unit,
+    onDelete: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val reveal = with(LocalDensity.current) { 168.dp.toPx() }
+    val offset = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    fun close() { scope.launch { offset.animateTo(0f) } }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Surface3)
+    ) {
+        Row(Modifier.matchParentSize(), horizontalArrangement = Arrangement.End) {
+            SwipeAction(R.drawable.ic_dots, "More", Surface3, TextHi) { close(); onMore() }
+            SwipeAction(R.drawable.ic_trash, "Delete", Danger, Color(0xFF1B0B07)) { close(); onDelete() }
+        }
+        Box(
+            Modifier
+                .offset { IntOffset(offset.value.roundToInt(), 0) }
+                .draggable(
+                    orientation = Orientation.Horizontal,
+                    state = rememberDraggableState { delta ->
+                        scope.launch { offset.snapTo((offset.value + delta).coerceIn(-reveal - 60f, 0f)) }
+                    },
+                    onDragStopped = { velocity ->
+                        offset.animateTo(if (offset.value < -reveal / 2 || velocity < -1500f) -reveal else 0f)
+                    },
+                )
+                .clickable { if (offset.value != 0f) close() else onClick() }
+        ) { content() }
     }
-    val size = if (small) 18.dp else 40.dp
-    Surface(shape = RoundedCornerShape(if (small) 5.dp else 10.dp), color = bg, modifier = Modifier.size(size)) {
-        Box(contentAlignment = Alignment.Center) {
-            Text(
-                letter,
-                color = fg,
-                fontWeight = FontWeight.Bold,
-                style = if (small) MaterialTheme.typography.labelSmall else MaterialTheme.typography.titleMedium,
+}
+
+@Composable
+private fun RowScope.SwipeAction(icon: Int, label: String, bg: Color, fg: Color, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .width(84.dp)
+            .fillMaxHeight()
+            .background(bg)
+            .clickable(onClick = onClick),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(painterResource(icon), contentDescription = null, tint = fg, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.height(4.dp))
+        Text(label, color = fg, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun Thumb(node: Node, size: Dp) {
+    val photo = node.photoPath
+    if (photo != null) {
+        PhotoImage(path = photo, maxPx = 200, modifier = Modifier.size(size).clip(RoundedCornerShape(12.dp)))
+    } else {
+        BoxPlaceholder(size)
+    }
+}
+
+/** Neutral box icon for entries without a photo (replaces the old S/C/I letter badges). */
+@Composable
+private fun BoxPlaceholder(size: Dp) {
+    Box(
+        Modifier
+            .size(size)
+            .clip(RoundedCornerShape(if (size < 40.dp) 8.dp else 12.dp))
+            .background(Surface2),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(painterResource(R.drawable.ic_box), contentDescription = null, tint = TextFaint, modifier = Modifier.size(size * 0.46f))
+    }
+}
+
+/** Kept for the pickers/search lists; now shows the neutral placeholder. */
+@Composable
+private fun TypeBadge(@Suppress("UNUSED_PARAMETER") type: NodeType, small: Boolean = false) {
+    BoxPlaceholder(if (small) 32.dp else 48.dp)
+}
+
+@Composable
+private fun Tag(text: String) {
+    Text(
+        text.uppercase(),
+        color = Brass,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(Brass.copy(alpha = 0.12f))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    )
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(
+        text.uppercase(),
+        style = MaterialTheme.typography.labelMedium,
+        color = TextMuted,
+        modifier = Modifier.padding(start = 4.dp, top = 6.dp, bottom = 2.dp),
+    )
+}
+
+@Composable
+private fun SwipeHint() {
+    Text(
+        "Swipe left on a row for options",
+        style = MaterialTheme.typography.bodySmall,
+        color = TextFaint,
+        textAlign = TextAlign.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+    )
+}
+
+@Composable
+private fun RoundIconButton(icon: ImageVector, description: String, onClick: () -> Unit) {
+    IconButton(
+        onClick = onClick,
+        colors = IconButtonDefaults.iconButtonColors(containerColor = Surface1, contentColor = TextHi),
+    ) { Icon(icon, contentDescription = description, modifier = Modifier.size(22.dp)) }
+}
+
+@Composable
+private fun RoundIconButton(icon: Painter, description: String, onClick: () -> Unit) {
+    IconButton(
+        onClick = onClick,
+        colors = IconButtonDefaults.iconButtonColors(containerColor = Surface1, contentColor = TextHi),
+    ) { Icon(icon, contentDescription = description, modifier = Modifier.size(22.dp)) }
+}
+
+/** Brass call-to-action pill ("New bin", "Add item"). */
+@Composable
+private fun BrassButton(text: String, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(30.dp)
+    Box(
+        Modifier
+            .shadow(14.dp, shape, ambientColor = Brass, spotColor = Brass)
+            .clip(shape)
+            .background(Brush.verticalGradient(listOf(BrassHi, Brass)))
+            .clickable(onClick = onClick)
+            .height(56.dp)
+            .padding(start = 20.dp, end = 26.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.Add, contentDescription = null, tint = BrassInk)
+            Spacer(Modifier.width(8.dp))
+            Text(text, color = BrassInk, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+private class SheetAction(
+    val icon: Int,
+    val label: String,
+    val note: String? = null,
+    val danger: Boolean = false,
+    val enabled: Boolean = true,
+    val onClick: () -> Unit,
+)
+
+/** Bottom sheet listing actions (replaces the three-dot menus). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ActionSheet(title: String, subtitle: String?, actions: List<SheetAction>, onDismiss: () -> Unit) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Surface1,
+        contentColor = TextHi,
+        dragHandle = {
+            Box(
+                Modifier
+                    .padding(top = 10.dp, bottom = 8.dp)
+                    .size(width = 38.dp, height = 5.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(Surface3)
             )
+        },
+    ) {
+        Column(Modifier.padding(start = 10.dp, end = 10.dp, bottom = 18.dp)) {
+            Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp)) {
+                Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodySmall, color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            actions.forEach { a ->
+                val color = if (a.danger) Danger else TextHi
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable(enabled = a.enabled) { onDismiss(); a.onClick() }
+                        .padding(horizontal = 12.dp, vertical = 13.dp)
+                        .alpha(if (a.enabled) 1f else 0.35f),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(painterResource(a.icon), contentDescription = null, tint = if (a.danger) Danger else TextMuted, modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.width(14.dp))
+                    Column {
+                        Text(a.label, color = color, style = MaterialTheme.typography.bodyLarge)
+                        if (a.note != null) Text(a.note, color = TextMuted, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
         }
     }
 }
@@ -1568,7 +1774,10 @@ private fun NameDialog(
     onRemovePhoto: (String) -> Unit = {},
     onViewPhoto: (Int) -> Unit = {},
 ) {
-    var name by rememberSaveable { mutableStateOf(initial) }
+    var field by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(initial, TextRange(0, initial.length)))
+    }
+    val name = field.text
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     AlertDialog(
@@ -1591,8 +1800,8 @@ private fun NameDialog(
                     Spacer(Modifier.height(12.dp))
                 }
                 OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
+                    value = field,
+                    onValueChange = { field = it },
                     label = { Text(label) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
@@ -1791,7 +2000,7 @@ private fun InfoDialog(store: InventoryStore, node: Node, onDismiss: () -> Unit)
                 }
                 InfoRow(
                     "QR code",
-                    if (node.hasQr) node.qr else "None yet (use “Assign QR code” in the ⋮ menu)",
+                    if (node.hasQr) node.qr else "None yet (swipe left › More › Assign QR code)",
                 )
             }
         },
@@ -2129,7 +2338,6 @@ private fun SearchResultRow(store: InventoryStore, node: Node, score: Float?, on
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Row(
             Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -2179,4 +2387,11 @@ private fun photoPurpose(target: String): String = when (target.substringBefore(
     "T" -> "Temporary storage"
     "Q" -> "Search by photo"
     else -> target
+}
+
+/** Next default name for a new bin: "Bin 001", "Bin 002", … */
+private fun nextBinName(store: InventoryStore): String {
+    val re = Regex("""^bin\s*0*(\d+)$""", RegexOption.IGNORE_CASE)
+    val max = store.storages().mapNotNull { re.find(it.name.trim())?.groupValues?.get(1)?.toIntOrNull() }.maxOrNull() ?: 0
+    return "Bin %03d".format(max + 1)
 }

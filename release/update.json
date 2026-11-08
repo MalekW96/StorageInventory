@@ -1,6 +1,6 @@
 {
-  "versionCode": 7,
-  "versionName": "1.4.2.1",
-  "apkUrl": "https://github.com/MalekW96/StorageInventory/releases/download/v1.4.2.1/StorageInventory.apk",
-  "notes": "Several photos per item: tap “Add another photo” while adding, swipe through them, delete any one. After creating a storage you're no longer sent straight to the camera: press + to add items by photo or with QR code + photo."
+  "versionCode": 8,
+  "versionName": "2.0.0.0",
+  "apkUrl": "https://github.com/MalekW96/StorageInventory/releases/download/v2.0.0.0/StorageInventory.apk",
+  "notes": "New premium dark design: Geist type, blended header, borderless cards and a brass “New bin” button. Swipe a row left for More / Delete (replaces the ⋮ menus). New bins get default names like “Bin 001”. The S/C/I letter badges are replaced by a neutral box icon."
 }

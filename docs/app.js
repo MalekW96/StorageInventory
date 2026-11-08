@@ -2,7 +2,7 @@
  * Everything is stored on the device (IndexedDB). No account, no server. */
 'use strict';
 
-const APP_VERSION = '1.4.2.1';
+const APP_VERSION = '2.0.0.0';
 
 // ===========================================================================
 // Small helpers
@@ -33,6 +33,16 @@ const ICON = {
   gear: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.48.48 0 0 0-.48.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.48.48 0 0 0-.59.22L2.74 8.87a.47.47 0 0 0 .12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.47.47 0 0 0-.12-.61zM12 15.6A3.6 3.6 0 1 1 15.6 12 3.6 3.6 0 0 1 12 15.6"/></svg>',
   more: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 8a2 2 0 1 0-2-2 2 2 0 0 0 2 2m0 2a2 2 0 1 0 2 2 2 2 0 0 0-2-2m0 6a2 2 0 1 0 2 2 2 2 0 0 0-2-2"/></svg>',
   close: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>',
+  box: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5z"/><path d="M3.5 7.5 12 12l8.5-4.5M12 12v9"/></svg>',
+  chev: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>',
+  dots: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M6 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4m6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4m6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4"/></svg>',
+  info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>',
+  camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+  qr: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z"/><path d="M14 14h2v2h-2zM18 14h2M14 18h2M18 18h2v2"/></svg>',
+  sheet: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M10 4v16"/></svg>',
+  pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m14 6 4 4"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
 };
 
 // ===========================================================================
@@ -336,7 +346,7 @@ const Camera = {
     g.rect(0, 0, c.width, c.height);
     g.roundRect ? g.roundRect(x, y, side, side, r) : g.rect(x, y, side, side);
     g.fill('evenodd');
-    g.strokeStyle = '#F2B35B'; g.lineWidth = 5 * dpr;
+    g.strokeStyle = '#E2C27F'; g.lineWidth = 5 * dpr;
     const len = side * 0.16;
     [[x, y, 1, 1], [x + side, y, -1, 1], [x, y + side, 1, -1], [x + side, y + side, -1, -1]].forEach(([px, py, dx, dy]) => {
       g.beginPath(); g.moveTo(px + dx * len, py); g.lineTo(px, py); g.lineTo(px, py + dy * len); g.stroke();
@@ -588,7 +598,7 @@ function photoStrip(ids, { removable = false, big = false } = {}) {
  * Name (and optionally type) dialog for a new entry, with photo preview and retake.
  * Resolves { name, type, photoId } or null when cancelled (the photo is then deleted).
  */
-function entryDialog({ title, message, label = 'Name', confirm = 'Done', photoIds = [], needType = false, photoTitle }) {
+function entryDialog({ title, message, label = 'Name', confirm = 'Done', photoIds = [], needType = false, photoTitle, initial = '' }) {
   return new Promise((resolve) => {
     let photos = [...photoIds];
     let type = null;
@@ -603,7 +613,7 @@ function entryDialog({ title, message, label = 'Name', confirm = 'Done', photoId
         <p style="margin:12px 0 0;font-weight:600">What is this?</p>
         <label class="choice"><input type="radio" name="d-type" value="ITEM"><span>Item<small>A single thing you're storing</small></span></label>
         <label class="choice"><input type="radio" name="d-type" value="CONTAINER"><span>Smaller container<small>A box or bin that holds more items</small></span></label>` : ''}
-      <label class="field"><span id="d-label">${esc(label)}</span><input id="d-name" autocomplete="off" autocapitalize="sentences" enterkeyhint="done"></label>`;
+      <label class="field"><span id="d-label">${esc(label)}</span><input id="d-name" autocomplete="off" autocapitalize="sentences" enterkeyhint="done" value="${esc(initial)}"></label>`;
     let close;
     const done = (value) => { close(); resolve(value); };
     const update = (scrim) => {
@@ -642,7 +652,7 @@ function entryDialog({ title, message, label = 'Name', confirm = 'Done', photoId
         input.oninput = () => update(scrim);
         input.onkeydown = (e) => { if (e.key === 'Enter' && !$('#d-ok', scrim).disabled) $('#d-ok', scrim).click(); };
         update(scrim);
-        if (!needType) setTimeout(() => input.focus(), 50);
+        if (!needType) setTimeout(() => { input.focus(); if (initial) input.select(); }, 50);
       },
     });
   });
@@ -703,30 +713,46 @@ function back() {
 // ===========================================================================
 // Rendering
 // ===========================================================================
-function topbar({ title, crumbs, backBtn = false, actions = '' }) {
-  return `<header class="topbar">
+function topbar({ title, crumbs, backBtn = false, actions = '', home = false }) {
+  return `<header class="topbar${home ? ' home' : ''}">
     ${backBtn ? `<button class="icon-btn" data-act="back" aria-label="Back">${ICON.back}</button>` : '<span style="width:6px"></span>'}
     <div class="titles"><h1>${esc(title)}</h1>${crumbs ? `<div class="crumbs">${esc(crumbs)}</div>` : ''}</div>
     ${actions}
   </header>`;
 }
 
+/** Neutral box icon shown when an entry has no photo (replaces the old S/C/I letter badges). */
 function badge(node, small = false) {
-  const letter = node.type === 'STORAGE' ? 'S' : node.type === 'CONTAINER' ? 'C' : 'I';
-  return `<div class="badge ${letter}${small ? ' small' : ''}">${letter}</div>`;
+  return `<div class="placeholder${small ? ' small' : ''}">${ICON.box}</div>`;
 }
 
-function nodeRow(node, detail, { score } = {}) {
-  const thumb = mainPhoto(node)
-    ? `<div class="thumb-wrap"><img class="thumb" data-photo="${esc(mainPhoto(node))}" alt="">${badge(node, true)}</div>`
-    : `<div class="thumb-wrap">${badge(node)}</div>`;
-  return `<div class="card row clickable" data-open="${esc(node.id)}">
-    ${thumb}
-    <div class="main"><div class="name">${esc(node.name)}</div><div class="detail">${esc(detail)}</div></div>
-    ${score != null ? `<span class="score">${Math.round(score * 100)}%</span>`
-      : `<button class="icon-btn" data-menu="${esc(node.id)}" aria-label="More options">${ICON.more}</button>`}
-  </div>`;
+function nextBinName() {
+  let max = 0;
+  for (const n of Store.nodes) {
+    const m = !n.parentId && /^bin\s*0*(\d+)$/i.exec(n.name.trim());
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return `Bin ${String(max + 1).padStart(3, '0')}`;
 }
+
+function nodeRow(node, detail, { score, tag } = {}) {
+  const thumb = mainPhoto(node)
+    ? `<img class="thumb" data-photo="${esc(mainPhoto(node))}" alt="">`
+    : badge(node);
+  const row = `<div class="row clickable" data-open="${esc(node.id)}">
+    ${thumb}
+    <div class="main"><div class="name">${esc(node.name)}</div><div class="detail">${tag ? `<span class="tag">${esc(tag)}</span>` : ''}${esc(detail)}</div></div>
+    ${score != null ? `<span class="score">${Math.round(score * 100)}%</span>` : `<span class="chev">${ICON.chev}</span>`}
+  </div>`;
+  if (score != null) return `<div class="card">${row}</div>`;
+  return `<div class="swipe" data-swipe="${esc(node.id)}">
+    <div class="swipe-actions">
+      <button class="sa-more" data-sa-more="${esc(node.id)}">${ICON.dots}More</button>
+      <button class="sa-del" data-sa-del="${esc(node.id)}">${ICON.trash}Delete</button>
+    </div>${row}</div>`;
+}
+
+const SWIPE_HINT = '<p class="swipe-hint">Swipe left on a row for options</p>';
 
 function render() {
   const app = $('#app');
@@ -770,17 +796,17 @@ function installBanner() {
 function renderHome() {
   const storages = Store.storages();
   const actions = `
-    ${Store.nodes.length ? `<button class="icon-btn" data-act="search" aria-label="Search">${ICON.search}</button>` : ''}
-    <button class="icon-btn" data-act="add-menu" aria-label="Add">${ICON.plus}</button>
-    <button class="icon-btn" data-act="settings" aria-label="Settings and updates">${ICON.gear}</button>`;
+    ${Store.nodes.length ? `<button class="icon-btn round" data-act="search" aria-label="Search">${ICON.search}</button>` : ''}
+    <button class="icon-btn round" data-act="settings" aria-label="Settings and updates">${ICON.gear}</button>`;
   let body;
   if (!storages.length) {
-    body = `<div class="empty"><h2>No Storage Data Available</h2><p>Tap + in the top right corner to add a storage.</p></div>`;
+    body = `<div class="empty"><div class="empty-icon">${ICON.box}</div><h2>No Storage Data Available</h2><p>Tap “New bin” to add your first one.</p></div>`;
   } else {
-    body = `<div class="list">${storages.map((s) =>
-      nodeRow(s, (s.qr ? '' : 'Temporary · ') + countText(Store.countInside(s.id)))).join('')}</div>`;
+    body = `<div class="label">${plural(storages.length, 'bin')}</div><div class="list">${storages.map((s) =>
+      nodeRow(s, countText(Store.countInside(s.id)), { tag: s.qr ? null : 'Temporary' })).join('')}</div>${SWIPE_HINT}`;
   }
-  return topbar({ title: 'Storage Inventory', actions }) + updateBanner() + installBanner() + `<main class="content">${body}</main>`;
+  return topbar({ title: 'Storage Inventory', actions, home: true }) + updateBanner() + installBanner() +
+    `<main class="content">${body}</main><button class="fab" data-act="add-menu">${ICON.plus}New bin</button>`;
 }
 
 function renderDetail() {
@@ -800,15 +826,15 @@ function renderDetail() {
   if (!kids.length) {
     list = `<p class="hint" style="text-align:center;padding:32px 16px">No items yet. Press + to start adding.</p>`;
   } else {
-    list = `<div class="label">Total inside: ${esc(countText(Store.countInside(node.id)))}</div>` +
+    list = `<div class="label">Inside · ${esc(countText(Store.countInside(node.id)))}</div>` +
       kids.map((c) => nodeRow(c, (canHold(c) ? `Container · ${countText(Store.countInside(c.id))}` : 'Item') +
-        (photoCount(c) > 1 ? ` · ${photoCount(c)} photos` : ''))).join('');
+        (photoCount(c) > 1 ? ` · ${photoCount(c)} photos` : ''))).join('') + SWIPE_HINT;
   }
   return topbar({
     title: node.name, crumbs, backBtn: true,
-    actions: `<button class="icon-btn" data-menu="${esc(node.id)}" aria-label="More options">${ICON.more}</button>`,
+    actions: `<button class="icon-btn round" data-menu="${esc(node.id)}" aria-label="Options">${ICON.dots}</button>`,
   }) + `<main class="content"><div class="list">${header}${list}</div></main>
-    <button class="fab" data-act="detail-add">${ICON.plus}Add</button>`;
+    <button class="fab" data-act="detail-add">${ICON.plus}Add item</button>`;
 }
 
 function searchResultsHtml() {
@@ -946,20 +972,45 @@ function infoDialog(node) {
     body: row('Name', node.name) + row('Type', typeLabel(node)) + row('Added', fmtDate(node.createdAt)) +
       row('Stored in', Store.location(node.id) || 'Top level') + row('Photos', String(photoCount(node))) +
       (canHold(node) ? row('Contains', countText(Store.countInside(node.id))) : '') +
-      row('QR code', node.qr || 'None yet (use “Assign QR code” in the ⋮ menu)'),
+      row('QR code', node.qr || 'None yet (swipe left › More › Assign QR code)'),
     actions: [{ label: 'Close', onClick: () => close() }],
   });
 }
 
+/** Bottom sheet with actions (replaces the old three-dot menus). */
+function sheet({ title, subtitle, items }) {
+  const scrim = document.createElement('div');
+  scrim.className = 'scrim sheet-scrim';
+  scrim.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>
+    ${title ? `<div class="sheet-title"><b>${esc(title)}</b>${subtitle ? `<span>${esc(subtitle)}</span>` : ''}</div>` : ''}</div>`;
+  const box = $('.sheet', scrim);
+  for (const it of items) {
+    if (!it) continue;
+    const b = document.createElement('button');
+    b.className = 'item' + (it.danger ? ' danger' : '');
+    b.disabled = !!it.disabled;
+    b.innerHTML = `${it.icon || ''}<span>${esc(it.label)}${it.note ? `<small>${esc(it.note)}</small>` : ''}</span>`;
+    b.onclick = () => { scrim.remove(); it.onClick(); };
+    box.appendChild(b);
+  }
+  scrim.addEventListener('click', (e) => { if (e.target === scrim) scrim.remove(); });
+  $('#layer').appendChild(scrim);
+}
+
 function nodeMenu(anchor, node) {
-  showMenu(anchor, [
-    { label: 'Info', onClick: () => infoDialog(node) },
-    !node.qr ? { label: 'Assign QR code', onClick: () => flowAssignQr(node) } : null,
-    { label: 'Add photo', onClick: () => flowAddPhoto(node) },
-    canHold(node) ? { label: 'Export to Excel', onClick: () => exportStorageExcel(node) } : null,
-    { label: 'Rename', onClick: () => flowRename(node) },
-    { label: 'Delete', danger: true, onClick: () => flowDelete(node) },
-  ]);
+  Log.add('Opened options', `“${node.name}”`);
+  sheet({
+    title: node.name,
+    subtitle: `${typeLabel(node)}${Store.location(node.id) ? ' · ' + Store.location(node.id) : ''}`,
+    items: [
+      { icon: ICON.info, label: 'Info', note: 'Date added, location, QR code', onClick: () => infoDialog(node) },
+      { icon: ICON.camera, label: 'Add photo', onClick: () => flowAddPhoto(node) },
+      !node.qr ? { icon: ICON.qr, label: 'Assign QR code', onClick: () => flowAssignQr(node) } : null,
+      canHold(node) ? { icon: ICON.sheet, label: 'Export to Excel', onClick: () => exportStorageExcel(node) } : null,
+      { icon: ICON.pencil, label: 'Rename', onClick: () => flowRename(node) },
+      { icon: ICON.trash, label: 'Delete', danger: true, onClick: () => flowDelete(node) },
+    ],
+  });
 }
 
 // ===========================================================================
@@ -984,7 +1035,7 @@ async function flowNewStorage() {
   const shot = await Camera.photo({ title: 'Take a photo of the storage unit', subtitle: 'Or tap “Skip photo”.' });
   if (!shot) return;
   const res = await entryDialog({
-    title: 'Name this storage', message: `QR code: ${qr}`, label: 'Storage name', confirm: 'Done',
+    title: 'Name this bin', message: `QR code: ${qr}`, label: 'Bin name', confirm: 'Done', initial: nextBinName(),
     photoIds: shot.photoId ? [shot.photoId] : [], photoTitle: 'Another photo of the storage unit',
   });
   if (!res) return;
@@ -994,9 +1045,9 @@ async function flowNewStorage() {
 
 async function flowTemporaryStorage() {
   const res = await entryDialog({
-    title: 'Create temporary storage',
-    message: 'No QR code needed. You can attach one later with “Assign QR code” in its ⋮ menu.',
-    label: 'Storage name', confirm: 'Create', photoTitle: 'Take a photo of the storage',
+    title: 'New temporary bin',
+    message: 'No QR code needed. Attach one later: swipe the bin left › More › Assign QR code.',
+    label: 'Bin name', confirm: 'Create', photoTitle: 'Take a photo of the bin', initial: nextBinName(),
   });
   if (!res) return;
   const storage = await Store.add({ qr: '', name: res.name, type: 'STORAGE', photoIds: res.photoIds });
@@ -1580,6 +1631,12 @@ async function exportLogExcel() {
 // ===========================================================================
 document.addEventListener('click', (e) => {
   const t = e.target;
+  const saMore = t.closest('[data-sa-more]');
+  if (saMore) { const n = Store.get(saMore.dataset.saMore); closeSwipe(); if (n) nodeMenu(null, n); return; }
+  const saDel = t.closest('[data-sa-del]');
+  if (saDel) { const n = Store.get(saDel.dataset.saDel); closeSwipe(); if (n) flowDelete(n); return; }
+  if (Swipe.justDragged) { Swipe.justDragged = false; return; }
+  if (Swipe.open && t.closest('[data-swipe]')) { closeSwipe(); return; }
   const menuBtn = t.closest('[data-menu]');
   if (menuBtn) {
     e.stopPropagation();
@@ -1612,17 +1669,24 @@ document.addEventListener('click', (e) => {
   else if (a === 'search') go('search');
   else if (a === 'settings') { state.updateCheck = null; go('settings'); }
   else if (a === 'add-menu') {
-    showMenu(act, [
-      { label: 'Take photo to add to existing storage', disabled: !Store.nodes.some(canHold), onClick: () => flowAddByPhoto() },
-      { label: 'Add new storage (scan QR code)', onClick: () => flowNewStorage() },
-      { label: 'Create temporary storage', onClick: () => flowTemporaryStorage() },
-    ]);
+    sheet({
+      title: 'New bin',
+      items: [
+        { icon: ICON.qr, label: 'Scan bin QR code', note: 'Then photograph the bin and name it', onClick: () => flowNewStorage() },
+        { icon: ICON.clock, label: 'Temporary bin', note: 'No QR code yet, attach one later', onClick: () => flowTemporaryStorage() },
+        { icon: ICON.camera, label: 'Add item to an existing bin', note: 'Take a photo, then pick the bin', disabled: !Store.nodes.some(canHold), onClick: () => flowAddByPhoto() },
+      ],
+    });
   } else if (a === 'detail-add') {
     const id = state.stack[state.stack.length - 1];
-    showMenu(act, [
-      { label: 'Add by photo', onClick: () => flowAddByPhoto(id) },
-      { label: 'Add with QR code + photo', onClick: () => flowAddChildByQr(id) },
-    ]);
+    const parent = Store.get(id);
+    sheet({
+      title: 'Add item', subtitle: parent ? `To “${parent.name}”` : '',
+      items: [
+        { icon: ICON.camera, label: 'Add by photo', note: 'Photos only, no QR label', onClick: () => flowAddByPhoto(id) },
+        { icon: ICON.qr, label: 'Add with QR code + photo', note: 'Scan the label, then photograph it', onClick: () => flowAddChildByQr(id) },
+      ],
+    });
   } else if (a === 'photo-node') { const n = Store.get(act.dataset.id); if (n) flowAddPhoto(n); }
   else if (a === 'search-photo') flowSearchByPhoto();
   else if (a === 'search-qr') flowFindByQr();
@@ -1658,4 +1722,48 @@ window.addEventListener('resize', () => { if (!Camera.el.hidden) Camera.drawFind
     try { swReg = await navigator.serviceWorker.register('sw.js'); } catch (e) { console.warn('SW failed', e); }
   }
   checkForUpdates(true);
+})();
+
+// ===========================================================================
+// Swipe-left rows: reveal More / Delete
+// ===========================================================================
+const Swipe = { open: null, justDragged: false };
+const SWIPE_W = 168;
+function closeSwipe() {
+  if (Swipe.open) { const row = $('.row', Swipe.open); if (row) row.style.transform = ''; Swipe.open = null; }
+}
+(function initSwipe() {
+  let el = null, row = null, x0 = 0, y0 = 0, dx = 0, mode = null, base = 0;
+  document.addEventListener('pointerdown', (e) => {
+    const s = e.target.closest('[data-swipe]');
+    if (!s || e.target.closest('.swipe-actions')) return;
+    if (Swipe.open && Swipe.open !== s) closeSwipe();
+    el = s; row = $('.row', s); x0 = e.clientX; y0 = e.clientY; dx = 0; mode = null;
+    base = Swipe.open === s ? -SWIPE_W : 0;
+  }, { passive: true });
+  document.addEventListener('pointermove', (e) => {
+    if (!el) return;
+    const mx = e.clientX - x0, my = e.clientY - y0;
+    if (!mode) {
+      if (Math.abs(mx) > 8 && Math.abs(mx) > Math.abs(my)) mode = 'h';
+      else if (Math.abs(my) > 8) { mode = 'v'; }
+    }
+    if (mode !== 'h') return;
+    dx = Math.min(0, Math.max(-SWIPE_W - 30, base + mx));
+    row.classList.add('dragging');
+    row.style.transform = `translateX(${dx}px)`;
+  }, { passive: true });
+  const end = () => {
+    if (!el) return;
+    if (mode === 'h') {
+      row.classList.remove('dragging');
+      if (dx < -SWIPE_W / 2) { row.style.transform = `translateX(${-SWIPE_W}px)`; Swipe.open = el; }
+      else { row.style.transform = ''; if (Swipe.open === el) Swipe.open = null; }
+      Swipe.justDragged = true;
+      setTimeout(() => { Swipe.justDragged = false; }, 350);
+    }
+    el = null; row = null; mode = null;
+  };
+  document.addEventListener('pointerup', end);
+  document.addEventListener('pointercancel', end);
 })();
