@@ -1,6 +1,6 @@
 {
-  "versionCode": 3,
-  "versionName": "1.1.0.1",
-  "apkUrl": "https://github.com/MalekW96/StorageInventory/releases/download/v1.1.0.1/StorageInventory.apk",
-  "notes": "New Notepad-style font (Inconsolata, a free look-alike of Notepad's Consolas) across the whole app. Also fixes the built-in update address."
+  "versionCode": 4,
+  "versionName": "1.2.0.1",
+  "apkUrl": "https://github.com/MalekW96/StorageInventory/releases/download/v1.2.0.1/StorageInventory.apk",
+  "notes": "Cleaner rows: the QR code line is gone. New Info option in every ⋮ menu showing when an entry was added (dd/mm/yyyy hh:mm:ss, 24-hour), where it's stored and its QR code."
 }

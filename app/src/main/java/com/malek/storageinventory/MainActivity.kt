@@ -95,6 +95,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -220,6 +223,7 @@ fun InventoryApp(store: InventoryStore) {
     var viewingItem by remember { mutableStateOf<String?>(null) }
     var viewingPhoto by remember { mutableStateOf<String?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
+    var infoFor by remember { mutableStateOf<String?>(null) }
 
     // --- Photos -------------------------------------------------------------
     // captureTarget says what the photo being taken is for:
@@ -304,6 +308,7 @@ fun InventoryApp(store: InventoryStore) {
                 onRename = { renaming = it },
                 onDelete = { deleting = it },
                 onPhoto = { takePhoto("N$SEP${it.id}") },
+                onInfo = { infoFor = it.id },
             )
             else -> DetailScreen(
                 store = store,
@@ -317,6 +322,7 @@ fun InventoryApp(store: InventoryStore) {
                 onDelete = { deleting = it },
                 onPhoto = { takePhoto("N$SEP${it.id}") },
                 onViewPhoto = { viewingPhoto = it },
+                onInfo = { infoFor = it.id },
             )
         }
 
@@ -461,6 +467,7 @@ fun InventoryApp(store: InventoryStore) {
                 onViewPhoto = { viewingPhoto = it },
                 onRename = { renaming = item },
                 onDelete = { viewingItem = null; deleting = item },
+                onInfo = { infoFor = item.id },
                 onDismiss = { viewingItem = null },
             )
         }
@@ -468,6 +475,15 @@ fun InventoryApp(store: InventoryStore) {
 
     viewingPhoto?.let { path ->
         PhotoViewer(path = path, onDismiss = { viewingPhoto = null })
+    }
+
+    infoFor?.let { id ->
+        val node = store.get(id)
+        if (node == null) {
+            infoFor = null
+        } else {
+            InfoDialog(store = store, node = node, onDismiss = { infoFor = null })
+        }
     }
 
     // QR already used
@@ -553,6 +569,7 @@ private fun HomeScreen(
     onRename: (Node) -> Unit,
     onDelete: (Node) -> Unit,
     onPhoto: (Node) -> Unit,
+    onInfo: (Node) -> Unit,
 ) {
     val storages = store.storages()
     Scaffold(
@@ -600,6 +617,7 @@ private fun HomeScreen(
                         onRename = { onRename(storage) },
                         onDelete = { onDelete(storage) },
                         onPhoto = { onPhoto(storage) },
+                        onInfo = { onInfo(storage) },
                     )
                 }
             }
@@ -619,6 +637,7 @@ private fun DetailScreen(
     onDelete: (Node) -> Unit,
     onPhoto: (Node) -> Unit,
     onViewPhoto: (String) -> Unit,
+    onInfo: (Node) -> Unit,
 ) {
     val children = store.children(node.id)
     val path = store.path(node.id)
@@ -650,6 +669,7 @@ private fun DetailScreen(
                         onRename = { onRename(node) },
                         onDelete = { onDelete(node) },
                         onPhoto = { onPhoto(node) },
+                        onInfo = { onInfo(node) },
                     )
                 },
                 colors = barColors(),
@@ -715,6 +735,7 @@ private fun DetailScreen(
                         onRename = { onRename(child) },
                         onDelete = { onDelete(child) },
                         onPhoto = { onPhoto(child) },
+                        onInfo = { onInfo(child) },
                     )
                 }
             }
@@ -1024,6 +1045,7 @@ private fun NodeRow(
     onRename: () -> Unit,
     onDelete: () -> Unit,
     onPhoto: () -> Unit,
+    onInfo: () -> Unit,
 ) {
     Card(
         modifier = Modifier
@@ -1066,19 +1088,13 @@ private fun NodeRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Text(
-                    "QR: ${node.qr}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
             }
             OverflowMenu(
                 hasPhoto = node.photoPath != null,
                 onRename = onRename,
                 onDelete = onDelete,
                 onPhoto = onPhoto,
+                onInfo = onInfo,
             )
         }
     }
@@ -1110,6 +1126,7 @@ private fun OverflowMenu(
     onRename: () -> Unit,
     onDelete: () -> Unit,
     onPhoto: () -> Unit,
+    onInfo: () -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
     Box {
@@ -1117,6 +1134,7 @@ private fun OverflowMenu(
             Icon(Icons.Filled.MoreVert, contentDescription = "More options")
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(text = { Text("Info") }, onClick = { open = false; onInfo() })
             DropdownMenuItem(
                 text = { Text(if (hasPhoto) "Retake photo" else "Take photo") },
                 onClick = { open = false; onPhoto() },
@@ -1296,6 +1314,7 @@ private fun ItemDialog(
     onViewPhoto: (String) -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
+    onInfo: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -1328,12 +1347,8 @@ private fun ItemDialog(
                 }
                 Spacer(Modifier.height(4.dp))
                 Text("Stored in: $location", style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    "QR: ${item.qr}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 Row {
+                    TextButton(onClick = onInfo) { Text("Info") }
                     TextButton(onClick = onRename) { Text("Rename") }
                     TextButton(onClick = onDelete) { Text("Delete", color = MaterialTheme.colorScheme.error) }
                 }
@@ -1341,6 +1356,47 @@ private fun ItemDialog(
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
+}
+
+private val addedFormat = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.US)
+
+/** Traceability details: when an entry was added, where it is and its QR code. */
+@Composable
+private fun InfoDialog(store: InventoryStore, node: Node, onDismiss: () -> Unit) {
+    val location = store.path(node.id).dropLast(1).joinToString(" › ") { it.name }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Info", fontWeight = FontWeight.SemiBold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                InfoRow("Name", node.name)
+                InfoRow("Type", typeLabel(node.type))
+                InfoRow(
+                    "Added",
+                    if (node.createdAt > 0) addedFormat.format(Date(node.createdAt)) else "Unknown",
+                )
+                InfoRow("Stored in", location.ifEmpty { "Top level" })
+                if (node.canHoldChildren) {
+                    val (items, containers) = store.countInside(node.id)
+                    InfoRow("Contains", countText(items, containers))
+                }
+                InfoRow("QR code", node.qr)
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+@Composable
+private fun InfoRow(label: String, value: String) {
+    Column {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(value, style = MaterialTheme.typography.bodyLarge)
+    }
 }
 
 @Composable
