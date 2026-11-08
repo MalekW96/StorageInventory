@@ -1,5 +1,5 @@
 /* Service worker: makes the app work offline and lets "Check for updates" install new versions. */
-const VERSION = '1.2.1.1';
+const VERSION = '1.3.1.1';
 const CACHE = 'si-' + VERSION;
 const MODELS = 'si-models';
 const SHELL = [
@@ -10,7 +10,8 @@ const SHELL = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
+  // cache: 'reload' skips the browser's HTTP cache so an update never installs stale files.
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))));
 });
 
 self.addEventListener('activate', (e) => {

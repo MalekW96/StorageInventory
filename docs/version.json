@@ -1,4 +1,4 @@
 {
-  "version": "1.2.1.1",
-  "notes": "First iPhone (web) version: QR scanning, photos after each scan, nested and temporary storages, photo-only items, Info with date and time added, and search by name, photo or QR code."
+  "version": "1.3.1.1",
+  "notes": "Export any storage or container to Excel from its ⋮ menu (every item with type, location, QR code, date added, photo). New activity log of every action with date and time, exportable to Excel from Settings for troubleshooting."
 }

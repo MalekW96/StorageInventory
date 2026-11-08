@@ -2,7 +2,7 @@
  * Everything is stored on the device (IndexedDB). No account, no server. */
 'use strict';
 
-const APP_VERSION = '1.2.1.1';
+const APP_VERSION = '1.3.1.1';
 
 // ===========================================================================
 // Small helpers
@@ -39,12 +39,14 @@ const DB = {
   db: null,
   open() {
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open('storage-inventory', 1);
+      const req = indexedDB.open('storage-inventory', 2);
       req.onupgradeneeded = () => {
         const db = req.result;
-        db.createObjectStore('nodes', { keyPath: 'id' });
-        db.createObjectStore('photos', { keyPath: 'id' });
-        db.createObjectStore('features', { keyPath: 'id' });
+        const have = db.objectStoreNames;
+        if (!have.contains('nodes')) db.createObjectStore('nodes', { keyPath: 'id' });
+        if (!have.contains('photos')) db.createObjectStore('photos', { keyPath: 'id' });
+        if (!have.contains('features')) db.createObjectStore('features', { keyPath: 'id' });
+        if (!have.contains('log')) db.createObjectStore('log', { keyPath: 'n', autoIncrement: true });
       };
       req.onsuccess = () => { this.db = req.result; resolve(); };
       req.onerror = () => reject(req.error);
@@ -64,7 +66,35 @@ const DB = {
   put: (s, v) => DB.request(s, 'readwrite', (st) => st.put(v)),
   del: (s, id) => DB.request(s, 'readwrite', (st) => st.delete(id)),
   clear: (s) => DB.request(s, 'readwrite', (st) => st.clear()),
+  count: (s) => DB.request(s, 'readonly', (st) => st.count()),
 };
+
+// ===========================================================================
+// Activity log: every interaction with date and time, for troubleshooting
+// ===========================================================================
+const Log = {
+  MAX: 5000,
+  screen: 'Home',
+  add(event, details = '') {
+    if (!DB.db) return;
+    DB.put('log', { t: Date.now(), e: event, d: String(details), s: this.screen, v: APP_VERSION }).catch(() => {});
+  },
+  async trim() {
+    const n = await DB.count('log');
+    if (n <= this.MAX) return;
+    let extra = n - this.MAX;
+    await new Promise((resolve) => {
+      const tx = DB.db.transaction('log', 'readwrite');
+      tx.objectStore('log').openCursor().onsuccess = (e) => {
+        const cur = e.target.result;
+        if (cur && extra-- > 0) { cur.delete(); cur.continue(); }
+      };
+      tx.oncomplete = resolve; tx.onerror = resolve;
+    });
+  },
+};
+window.addEventListener('error', (e) => Log.add('Error', `${e.message} @ ${e.filename}:${e.lineno}`));
+window.addEventListener('unhandledrejection', (e) => Log.add('Error', String(e.reason && (e.reason.stack || e.reason.message) || e.reason)));
 
 // ===========================================================================
 // Inventory store (nodes kept in memory, saved to IndexedDB)
@@ -101,15 +131,26 @@ const Store = {
     const node = { id: uid(), qr, name: name.trim(), type, parentId, createdAt: Date.now(), photoId };
     this.nodes.push(node);
     await DB.put('nodes', node);
+    Log.add(`Added ${type.toLowerCase()}`, `“${node.name}”` + (qr ? ` · QR ${qr}` : ' · no QR') +
+      (parentId ? ` · in ${this.path(parentId).map((p) => p.name).join(' › ')}` : '') + (photoId ? ' · with photo' : ' · no photo'));
     return node;
   },
   async update(id, patch) {
     const n = this.get(id);
     if (!n) return;
+    const before = { ...n };
     Object.assign(n, patch);
     await DB.put('nodes', n);
+    if ('name' in patch) Log.add('Renamed', `“${before.name}” → “${n.name}”`);
+    if ('qr' in patch) Log.add('QR code assigned', `“${n.name}” · QR ${n.qr}`);
+    if ('photoId' in patch) Log.add(before.photoId ? 'Photo replaced' : 'Photo added', `“${n.name}”`);
   },
   async remove(id) {
+    const target = this.get(id);
+    if (target) {
+      const c = this.countInside(id);
+      Log.add(`Deleted ${target.type.toLowerCase()}`, `“${target.name}” · with ${c.items} item(s), ${c.containers} container(s) inside`);
+    }
     const remove = new Set();
     const queue = [id];
     while (queue.length) {
@@ -277,6 +318,7 @@ const Camera = {
 
   /** Opens the camera and resolves with the text of the first QR code seen (or null). */
   async scan({ title, subtitle, keepOpen = false }) {
+    Log.add('Scanner opened', title);
     this.keepOpen = keepOpen;
     this.mode = 'scan';
     this.show(title, subtitle);
@@ -307,7 +349,10 @@ const Camera = {
         if (code && code.data && code.data.trim()) this.finish(code.data.trim(), false);
       };
       this.loop = requestAnimationFrame(tick);
-    }).then((r) => r.value);
+    }).then((r) => {
+      Log.add(r.value ? 'QR scanned' : 'Scan cancelled', r.value ? `${r.value} · ${title}` : title);
+      return r.value;
+    });
   },
 
   /**
@@ -327,13 +372,15 @@ const Camera = {
     this.drawFinder(false);
     const ok = await this.ensureStream();
     if (!ok) {
+      Log.add('Live camera unavailable', 'Using the system camera instead');
       // No live camera: fall back to the system camera via a file input (needs a tap).
       this.close();
       return pickPhotoWithSystemCamera({ title, allowSkip, save });
     }
     const r = await new Promise((resolve) => { this.resolve = resolve; });
-    if (r.cancelled) return null;
-    if (r.value == null) return { skipped: true };
+    if (r.cancelled) { Log.add('Photo cancelled', title); return null; }
+    if (r.value == null) { Log.add('Photo skipped', title); return { skipped: true }; }
+    Log.add('Photo taken', title);
     return r.value;
   },
 
@@ -412,6 +459,7 @@ function dialog({ title, body = '', actions = [], onOpen, dismissable = true, on
 }
 
 function alertDialog(text, title = '') {
+  Log.add('Notice shown', (title ? title + ': ' : '') + text);
   return new Promise((resolve) => {
     const close = dialog({
       title, body: `<p>${esc(text)}</p>`, onDismiss: resolve,
@@ -621,6 +669,11 @@ function render() {
   while (state.stack.length && !Store.get(state.stack[state.stack.length - 1])) state.stack.pop();
   if (state.screen === 'detail' && !state.stack.length) state.screen = 'home';
 
+  const top = state.stack.length ? Store.get(state.stack[state.stack.length - 1]) : null;
+  const screenName = state.screen === 'search' ? 'Search' : state.screen === 'settings' ? 'Settings'
+    : top ? `${typeLabel(top)}: ${top.name}` : 'Home';
+  if (screenName !== Log.screen) { Log.screen = screenName; Log.add('Opened screen', screenName); }
+
   let html = '';
   if (state.screen === 'home') html = renderHome();
   else if (state.screen === 'detail') html = renderDetail();
@@ -628,6 +681,8 @@ function render() {
   else if (state.screen === 'settings') html = renderSettings();
   app.innerHTML = html;
   hydratePhotos(app);
+  const lc = $('#log-count');
+  if (lc) DB.count('log').then((n) => { lc.textContent = n; }).catch(() => {});
   if (state.screen === 'search') wireSearch();
 }
 
@@ -732,6 +787,12 @@ function wireSearch() {
   if (!input) return;
   input.oninput = () => {
     state.search.query = input.value;
+    clearTimeout(wireSearch.timer);
+    const q = input.value.trim();
+    if (q) wireSearch.timer = setTimeout(() => {
+      const n = Store.nodes.filter((x) => x.name.toLowerCase().includes(q.toLowerCase()) || (x.qr && x.qr.toLowerCase().includes(q.toLowerCase()))).length;
+      Log.add('Searched by name', `“${q}” · ${n} result(s)`);
+    }, 1500);
     if (input.value.trim()) clearSearchPhoto();
     const box = $('#search-results');
     box.innerHTML = searchResultsHtml();
@@ -767,6 +828,11 @@ function renderSettings() {
         <button class="btn outline" data-act="import">Restore backup</button></div>
     </div>
     <div class="card" style="padding:16px">
+      <div style="font-weight:600;font-size:17px">Troubleshooting</div>
+      <p class="hint">Every action in the app is recorded with its date and time (<span id="log-count">…</span> entries kept on this device).</p>
+      <button class="btn outline" data-act="export-log">Export activity log (Excel)</button>
+    </div>
+    <div class="card" style="padding:16px">
       <div style="font-weight:600;font-size:17px">Inventory</div>
       <p>${plural(counts.S, 'storage')} · ${plural(counts.C, 'container')} · ${plural(counts.I, 'item')}</p>
     </div>
@@ -777,6 +843,7 @@ function renderSettings() {
 // Item & info dialogs
 // ===========================================================================
 function itemDialog(item) {
+  Log.add('Opened item', `“${item.name}”`);
   const photo = item.photoId
     ? `<img class="dialog-photo" style="height:220px" data-photo="${esc(item.photoId)}" data-kind="full" data-view="${esc(item.photoId)}" alt="">`
     : `<p class="small-muted">No photo yet</p>`;
@@ -798,6 +865,7 @@ function itemDialog(item) {
 }
 
 function infoDialog(node) {
+  Log.add('Viewed info', `“${node.name}”`);
   const row = (k, v) => `<div class="info-row"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`;
   const close = dialog({
     title: 'Info',
@@ -814,6 +882,7 @@ function nodeMenu(anchor, node) {
     { label: 'Info', onClick: () => infoDialog(node) },
     !node.qr ? { label: 'Assign QR code', onClick: () => flowAssignQr(node) } : null,
     { label: node.photoId ? 'Retake photo' : 'Take photo', onClick: () => flowRetakePhoto(node) },
+    canHold(node) ? { label: 'Export to Excel', onClick: () => exportStorageExcel(node) } : null,
     { label: 'Rename', onClick: () => flowRename(node) },
     { label: 'Delete', danger: true, onClick: () => flowDelete(node) },
   ]);
@@ -823,6 +892,7 @@ function nodeMenu(anchor, node) {
 // Flows
 // ===========================================================================
 async function showDuplicate(node) {
+  Log.add('Duplicate QR code', `Belongs to “${node.name}” · QR ${node.qr}`);
   const where = Store.location(node.id);
   const open = await confirmDialog({
     title: 'QR code already registered',
@@ -1108,8 +1178,11 @@ async function flowSearchByPhoto() {
       await sleep(0);
     }
     s.results = scored.filter((r) => r.score >= 0.3).sort((a, b) => b.score - a.score).slice(0, 15);
+    const best = s.results[0];
+    Log.add('Photo search results', `${s.results.length} match(es)` + (best ? ` · best: “${best.node.name}” ${Math.round(best.score * 100)}%` : '') + (Similar.failed ? ' · colour only' : ''));
   } catch (e) {
     s.error = 'Photo search failed: ' + (e.message || e);
+    Log.add('Photo search failed', e.message || String(e));
   }
   if (state.screen === 'search') render();
 }
@@ -1133,6 +1206,7 @@ async function exportBackup() {
   const d = new Date();
   const name = `StorageInventory-backup-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.json`;
   const file = new File([JSON.stringify(data)], name, { type: 'application/json' });
+  Log.add('Backup saved', `${data.nodes.length} entries · ${photos.length} photos · ${name}`);
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try { await navigator.share({ files: [file], title: 'Storage Inventory backup' }); return; } catch (e) { if (e.name === 'AbortError') return; }
   }
@@ -1173,6 +1247,7 @@ function importBackup() {
       await DB.put('nodes', { ...n, photoId: n.photoId ? idMap.get(n.photoId) || null : null });
     }
     await Store.load();
+    Log.add('Backup restored', `${data.nodes.length} entries from ${fmtDate(data.exportedAt)}`);
     state.stack = []; state.screen = 'home';
     render();
     toast('Backup restored');
@@ -1203,6 +1278,7 @@ async function checkForUpdates(silent = false) {
   if (!silent) { state.updateCheck = { status: 'checking' }; render(); }
   try {
     const info = await fetchLatest();
+    Log.add(silent ? 'Automatic update check' : 'Checking for updates', `Installed ${APP_VERSION} · latest ${info.version}`);
     if (newer(info.version, APP_VERSION)) {
       state.update = info;
       state.updateCheck = { status: 'available', version: info.version, notes: info.notes };
@@ -1210,12 +1286,14 @@ async function checkForUpdates(silent = false) {
       state.updateCheck = { status: 'latest', version: info.version };
     }
   } catch (e) {
+    Log.add('Update check failed', e.message || String(e));
     if (!silent) state.updateCheck = { status: 'error', message: "Couldn't check for updates. Are you online?" };
   }
   render();
 }
 
 async function applyUpdate() {
+  Log.add('Installing update', state.update ? state.update.version : '');
   toast('Updating…');
   try {
     if (swReg) {
@@ -1232,6 +1310,197 @@ async function applyUpdate() {
     }
   } catch (e) { console.warn(e); }
   location.reload();
+}
+
+// ===========================================================================
+// Excel export (.xlsx written directly: zip + spreadsheet XML)
+// ===========================================================================
+const Xlsx = (() => {
+  const CRC = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+    return t;
+  })();
+  const crc32 = (bytes) => { let c = 0xFFFFFFFF; for (let i = 0; i < bytes.length; i++) c = CRC[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+
+  /** Stored (uncompressed) zip archive from [{name, data: Uint8Array}]. */
+  function zip(files) {
+    const enc = new TextEncoder();
+    const chunks = [], central = [];
+    let offset = 0;
+    const d = new Date();
+    const time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+    const date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+    for (const f of files) {
+      const name = enc.encode(f.name), data = f.data, crc = crc32(data);
+      const local = new DataView(new ArrayBuffer(30));
+      local.setUint32(0, 0x04034b50, true); local.setUint16(4, 20, true); local.setUint16(6, 0x0800, true);
+      local.setUint16(8, 0, true); local.setUint16(10, time, true); local.setUint16(12, date, true);
+      local.setUint32(14, crc, true); local.setUint32(18, data.length, true); local.setUint32(22, data.length, true);
+      local.setUint16(26, name.length, true); local.setUint16(28, 0, true);
+      chunks.push(new Uint8Array(local.buffer), name, data);
+      const cen = new DataView(new ArrayBuffer(46));
+      cen.setUint32(0, 0x02014b50, true); cen.setUint16(4, 20, true); cen.setUint16(6, 20, true); cen.setUint16(8, 0x0800, true);
+      cen.setUint16(10, 0, true); cen.setUint16(12, time, true); cen.setUint16(14, date, true);
+      cen.setUint32(16, crc, true); cen.setUint32(20, data.length, true); cen.setUint32(24, data.length, true);
+      cen.setUint16(28, name.length, true); cen.setUint32(42, offset, true);
+      central.push(new Uint8Array(cen.buffer), name);
+      offset += 30 + name.length + data.length;
+    }
+    const cenSize = central.reduce((a, c) => a + c.length, 0);
+    const end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true);
+    end.setUint32(12, cenSize, true); end.setUint32(16, offset, true);
+    return new Blob([...chunks, ...central, new Uint8Array(end.buffer)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  }
+
+  const x = (s) => String(s ?? '').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const col = (i) => { let n = i + 1, s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; };
+  const MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+  const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+  const HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+
+  function sheetXml(s) {
+    const cols = Math.max(1, s.header.length, ...s.rows.map((r) => r.length));
+    const row = (r, cells, header) => `<row r="${r}">` + cells.map((v, c) => {
+      if (v == null || v === '') return '';
+      const ref = col(c) + r, st = header ? ' s="1"' : '';
+      if (typeof v === 'number') return `<c r="${ref}"${st}><v>${v}</v></c>`;
+      return `<c r="${ref}"${st} t="inlineStr"><is><t xml:space="preserve">${x(v)}</t></is></c>`;
+    }).join('') + '</row>';
+    return HEAD + `<worksheet xmlns="${MAIN}" xmlns:r="${REL}">` +
+      '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>' +
+      '<cols>' + Array.from({ length: cols }, (_, c) => `<col min="${c + 1}" max="${c + 1}" width="${s.widths[c] || 14}" customWidth="1"/>`).join('') + '</cols>' +
+      '<sheetData>' + row(1, s.header, true) + s.rows.map((r, i) => row(i + 2, r, false)).join('') + '</sheetData>' +
+      `<autoFilter ref="A1:${col(cols - 1)}${s.rows.length + 1}"/></worksheet>`;
+  }
+
+  const STYLES = HEAD + `<styleSheet xmlns="${MAIN}">` +
+    '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts>' +
+    '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>' +
+    '<fill><patternFill patternType="solid"><fgColor rgb="FF1F4E5F"/><bgColor indexed="64"/></patternFill></fill></fills>' +
+    '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+    '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
+    '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs>' +
+    '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
+
+  /** sheets: [{ name, header: [...], rows: [[...]], widths: [...] }] → Blob */
+  function build(sheets) {
+    const enc = new TextEncoder();
+    const n = sheets.length;
+    const used = new Set();
+    const names = sheets.map((s, i) => {
+      let nm = (s.name || '').replace(/[\[\]:*?\/\\]/g, ' ').trim().slice(0, 31) || `Sheet${i + 1}`;
+      while (used.has(nm.toLowerCase())) nm = nm.slice(0, 28) + '_' + (i + 1);
+      used.add(nm.toLowerCase());
+      return nm;
+    });
+    const files = [
+      { name: '[Content_Types].xml', text: HEAD + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>' +
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+        sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('') +
+        '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>' },
+      { name: '_rels/.rels', text: HEAD + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        `<Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
+      { name: 'xl/workbook.xml', text: HEAD + `<workbook xmlns="${MAIN}" xmlns:r="${REL}"><sheets>` +
+        names.map((nm, i) => `<sheet name="${x(nm)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('') + '</sheets></workbook>' },
+      { name: 'xl/_rels/workbook.xml.rels', text: HEAD + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="${REL}/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('') +
+        `<Relationship Id="rId${n + 1}" Type="${REL}/styles" Target="styles.xml"/></Relationships>` },
+      { name: 'xl/styles.xml', text: STYLES },
+      ...sheets.map((s, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, text: sheetXml(s) })),
+    ];
+    return zip(files.map((f) => ({ name: f.name, data: enc.encode(f.text) })));
+  }
+  return { build };
+})();
+
+function excelFileName(base) {
+  const d = new Date();
+  const clean = (base || 'Export').replace(/[^\p{L}\p{N} _.-]/gu, '').trim().replace(/ /g, '_').slice(0, 40) || 'Export';
+  return `${clean}_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.xlsx`;
+}
+
+async function saveOrShare(blob, name, title) {
+  const file = new File([blob], name, { type: blob.type });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 3000);
+}
+
+function storageWorkbook(root) {
+  const rows = [];
+  const walk = (parent, level) => {
+    for (const child of Store.children(parent.id)) {
+      rows.push([
+        rows.length + 1, child.name, typeLabel(child), Store.location(child.id), parent.name, level,
+        child.qr || '(none)', fmtDate(child.createdAt), child.photoId ? 'Yes' : 'No',
+        canHold(child) ? countText(Store.countInside(child.id)) : '',
+      ]);
+      if (canHold(child)) walk(child, level + 1);
+    }
+  };
+  walk(root, 1);
+  const c = Store.countInside(root.id);
+  return [
+    { name: 'Contents', header: ['#', 'Name', 'Type', 'Location', 'Directly inside', 'Level', 'QR code', 'Added', 'Photo', 'Contents'],
+      rows, widths: [6, 30, 18, 40, 24, 7, 22, 21, 8, 26] },
+    { name: 'Summary', header: ['Field', 'Value'], widths: [20, 50], rows: [
+      ['Name', root.name], ['Type', typeLabel(root)], ['Location', Store.location(root.id) || 'Top level'],
+      ['QR code', root.qr || '(none)'], ['Added', fmtDate(root.createdAt)],
+      ['Items inside', c.items], ['Containers inside', c.containers],
+      ['Exported', fmtDate(Date.now())], ['App version', `${APP_VERSION} (web)`],
+    ] },
+  ];
+}
+
+async function exportStorageExcel(node) {
+  Log.add('Export to Excel started', `“${node.name}”`);
+  try {
+    const sheets = storageWorkbook(node);
+    const name = excelFileName(node.name);
+    Log.add('Exported to Excel', `“${node.name}” · ${sheets[0].rows.length} rows · ${name}`);
+    await saveOrShare(Xlsx.build(sheets), name, `Storage Inventory – ${node.name}`);
+  } catch (e) {
+    Log.add('Export failed', `“${node.name}” · ${e.message || e}`);
+    alertDialog("Couldn't create the Excel file: " + (e.message || e));
+  }
+}
+
+async function exportLogExcel() {
+  Log.add('Activity log export started');
+  try {
+    await sleep(50);
+    const entries = await DB.all('log');
+    const sheets = [
+      { name: 'Activity log', header: ['#', 'Date & time', 'Event', 'Details', 'Screen', 'App version'], widths: [7, 21, 26, 70, 26, 12],
+        rows: entries.map((e, i) => [i + 1, fmtDate(e.t), e.e, e.d, e.s, e.v]) },
+      { name: 'Device', header: ['Field', 'Value'], widths: [16, 60], rows: [
+        ['App version', `${APP_VERSION} (web)`],
+        ['Mode', (navigator.standalone || matchMedia('(display-mode: standalone)').matches) ? 'Home Screen app' : 'Browser'],
+        ['Browser', navigator.userAgent],
+        ['Entries', entries.length],
+        ['First entry', entries[0] ? fmtDate(entries[0].t) : '-'],
+        ['Last entry', entries.length ? fmtDate(entries[entries.length - 1].t) : '-'],
+        ['Exported', fmtDate(Date.now())],
+      ] },
+    ];
+    const name = excelFileName('StorageInventory_log');
+    await saveOrShare(Xlsx.build(sheets), name, 'Storage Inventory activity log');
+    Log.add('Activity log exported', `${entries.length} entries · ${name}`);
+  } catch (e) {
+    Log.add('Activity log export failed', e.message || String(e));
+    alertDialog("Couldn't create the log file: " + (e.message || e));
+  }
 }
 
 // ===========================================================================
@@ -1252,7 +1521,11 @@ document.addEventListener('click', (e) => {
   if (open) {
     const node = Store.get(open.dataset.open);
     if (!node) return;
-    if (state.screen === 'search') { clearSearchPhoto(); return openNode(node); }
+    if (state.screen === 'search') {
+      Log.add('Opened search result', `“${node.name}” (${state.search.photoUrl ? 'photo' : 'name'} search)`);
+      clearSearchPhoto();
+      return openNode(node);
+    }
     if (canHold(node)) { state.stack.push(node.id); go('detail'); } else itemDialog(node);
     return;
   }
@@ -1281,6 +1554,7 @@ document.addEventListener('click', (e) => {
   else if (a === 'check-update') checkForUpdates(false);
   else if (a === 'apply-update') applyUpdate();
   else if (a === 'export') exportBackup();
+  else if (a === 'export-log') exportLogExcel();
   else if (a === 'import') importBackup();
   else if (a === 'dismiss-install') { try { localStorage.setItem('installTipDismissed', '1'); } catch (err) { /* ignore */ } render(); }
 });
@@ -1299,6 +1573,9 @@ window.addEventListener('resize', () => { if (!Camera.el.hidden) Camera.drawFind
     $('#app').innerHTML = `<div class="empty"><h2>Can't open storage</h2><p>${esc(e.message || e)}. If you're in a Private tab, open the app in a normal Safari tab.</p></div>`;
     return;
   }
+  const standalone = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
+  Log.add('App opened', `Version ${APP_VERSION} (web) · ${standalone ? 'Home Screen app' : 'browser'} · ${navigator.userAgent}`);
+  Log.trim().catch(() => {});
   render();
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if ('serviceWorker' in navigator) {

@@ -96,6 +96,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -107,6 +108,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT))
+        ActivityLog.init(applicationContext)
         val store = InventoryStore(applicationContext)
         setContent {
             InventoryTheme {
@@ -284,6 +286,7 @@ fun InventoryApp(store: InventoryStore) {
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
         val target = captureTarget ?: return@rememberLauncherForActivityResult
         captureTarget = null
+        ActivityLog.log(if (ok) "Photo taken" else "Photo cancelled", photoPurpose(target))
         scope.launch {
             val path = if (ok) withContext(Dispatchers.IO) { PhotoStore.finishCapture(context) } else null
             onPhotoResult(target, path)
@@ -354,6 +357,34 @@ fun InventoryApp(store: InventoryStore) {
         }
     }
 
+    fun exportStorage(node: Node) {
+        ActivityLog.log("Export to Excel started", "“${node.name}”")
+        scope.launch {
+            try {
+                val version = Updater.installedVersion(context).second
+                val sheets = Exporter.storageSheets(store, node, version)
+                val file = withContext(Dispatchers.IO) {
+                    Exporter.write(context, Exporter.fileName(node.name), sheets)
+                }
+                ActivityLog.log("Exported to Excel", "“${node.name}” · ${sheets.first().rows.size} rows · ${file.name}")
+                Exporter.share(context, file, "Storage Inventory – ${node.name}")
+            } catch (e: Exception) {
+                ActivityLog.log("Export failed", "“${node.name}” · ${e.message}")
+                message = "Couldn't create the Excel file: ${e.message}"
+            }
+        }
+    }
+
+    val screenName = when {
+        showSettings -> "Settings"
+        showSearch -> "Search"
+        else -> currentId?.let { store.get(it) }?.let { "${typeLabel(it.type)}: ${it.name}" } ?: "Home"
+    }
+    LaunchedEffect(screenName) {
+        ActivityLog.screen = screenName
+        ActivityLog.log("Opened screen", screenName)
+    }
+
     BackHandler(enabled = stack.isNotEmpty() && scanMode == null && !showSettings && !showSearch) {
         stack.removeAt(stack.lastIndex)
     }
@@ -381,6 +412,7 @@ fun InventoryApp(store: InventoryStore) {
                 onAddTemporary = { creatingTemp = true },
                 onFind = { showSearch = true },
                 onAssignQr = { scanMode = ScanMode.AssignQr(it.id) },
+                onExport = { exportStorage(it) },
                 onSettings = { showSettings = true },
                 onOpen = { stack.add(it.id) },
                 onRename = { renaming = it },
@@ -395,6 +427,7 @@ fun InventoryApp(store: InventoryStore) {
                 onScanAdd = { scanMode = ScanMode.AddTo(current.id) },
                 onPhotoAdd = { photoItemTarget = current.id; takePhoto("P") },
                 onAssignQr = { scanMode = ScanMode.AssignQr(it.id) },
+                onExport = { exportStorage(it) },
                 onOpen = { child ->
                     if (child.canHoldChildren) stack.add(child.id) else viewingItem = child.id
                 },
@@ -422,11 +455,16 @@ fun InventoryApp(store: InventoryStore) {
                     "Scan a QR code" to "The code will be attached to “$name”."
                 }
             }
+            LaunchedEffect(mode) { ActivityLog.log("Scanner opened", title) }
             QrScannerScreen(
                 title = title,
                 subtitle = subtitle,
-                onCancel = { scanMode = null },
+                onCancel = {
+                    ActivityLog.log("Scan cancelled", title)
+                    scanMode = null
+                },
                 onScanned = { qr ->
+                    ActivityLog.log("QR scanned", "$qr · $title")
                     scanMode = null
                     val existing = store.findByQr(qr)
                     when (mode) {
@@ -611,6 +649,7 @@ fun InventoryApp(store: InventoryStore) {
     // Item details
     viewingItem?.let { id ->
         val item = store.get(id)
+        LaunchedEffect(id) { item?.let { ActivityLog.log("Opened item", "“${it.name}”") } }
         if (item == null) {
             viewingItem = null
         } else {
@@ -633,6 +672,7 @@ fun InventoryApp(store: InventoryStore) {
 
     infoFor?.let { id ->
         val node = store.get(id)
+        LaunchedEffect(id) { node?.let { ActivityLog.log("Viewed info", "“${it.name}”") } }
         if (node == null) {
             infoFor = null
         } else {
@@ -642,6 +682,7 @@ fun InventoryApp(store: InventoryStore) {
 
     // QR already used
     duplicate?.let { node ->
+        LaunchedEffect(node.id) { ActivityLog.log("Duplicate QR code", "Belongs to “${node.name}” · QR ${node.qr}") }
         val where = store.path(node.id).dropLast(1).joinToString(" › ") { it.name }
         AlertDialog(
             onDismissRequest = { duplicate = null },
@@ -661,6 +702,7 @@ fun InventoryApp(store: InventoryStore) {
     }
 
     notFoundQr?.let { qr ->
+        LaunchedEffect(qr) { ActivityLog.log("QR not in inventory", qr) }
         AlertDialog(
             onDismissRequest = { notFoundQr = null },
             title = { Text("Not in your inventory") },
@@ -670,6 +712,7 @@ fun InventoryApp(store: InventoryStore) {
     }
 
     message?.let { text ->
+        LaunchedEffect(text) { ActivityLog.log("Notice shown", text) }
         AlertDialog(
             onDismissRequest = { message = null },
             text = { Text(text) },
@@ -721,6 +764,7 @@ private fun HomeScreen(
     onAddTemporary: () -> Unit,
     onFind: () -> Unit,
     onAssignQr: (Node) -> Unit,
+    onExport: (Node) -> Unit,
     onSettings: () -> Unit,
     onOpen: (Node) -> Unit,
     onRename: (Node) -> Unit,
@@ -794,6 +838,7 @@ private fun HomeScreen(
                         onPhoto = { onPhoto(storage) },
                         onInfo = { onInfo(storage) },
                         onAssignQr = { onAssignQr(storage) },
+                        onExport = { onExport(storage) },
                     )
                 }
             }
@@ -810,6 +855,7 @@ private fun DetailScreen(
     onScanAdd: () -> Unit,
     onPhotoAdd: () -> Unit,
     onAssignQr: (Node) -> Unit,
+    onExport: (Node) -> Unit,
     onOpen: (Node) -> Unit,
     onRename: (Node) -> Unit,
     onDelete: (Node) -> Unit,
@@ -849,6 +895,7 @@ private fun DetailScreen(
                         onPhoto = { onPhoto(node) },
                         onInfo = { onInfo(node) },
                         onAssignQr = if (node.hasQr) null else ({ onAssignQr(node) }),
+                        onExport = { onExport(node) },
                     )
                 },
                 colors = barColors(),
@@ -929,6 +976,7 @@ private fun DetailScreen(
                         onPhoto = { onPhoto(child) },
                         onInfo = { onInfo(child) },
                         onAssignQr = { onAssignQr(child) },
+                        onExport = { onExport(child) },
                     )
                 }
             }
@@ -961,22 +1009,56 @@ private fun SettingsScreen(store: InventoryStore, onBack: () -> Unit) {
 
     fun check() {
         state = UpdateState.Checking
+        ActivityLog.log("Checking for updates", "Installed $installedName ($installedCode)")
         scope.launch {
             state = try {
                 val info = Updater.fetchLatest(context)
-                if (info.versionCode > installedCode) UpdateState.Available(info)
-                else UpdateState.UpToDate(info.versionName)
+                if (info.versionCode > installedCode) {
+                    ActivityLog.log("Update available", "${info.versionName} (${info.versionCode})")
+                    UpdateState.Available(info)
+                } else {
+                    ActivityLog.log("Up to date", "Latest published ${info.versionName}")
+                    UpdateState.UpToDate(info.versionName)
+                }
             } catch (e: Exception) {
+                ActivityLog.log("Update check failed", e.message ?: "")
                 UpdateState.Failed(e.message ?: "Couldn't check for updates.")
             }
         }
     }
 
+    var logCount by remember { mutableStateOf(ActivityLog.count()) }
+    var logBusy by remember { mutableStateOf(false) }
+    var logError by remember { mutableStateOf<String?>(null) }
+
+    fun exportLog() {
+        logBusy = true
+        logError = null
+        ActivityLog.log("Activity log export started")
+        scope.launch {
+            try {
+                val sheets = Exporter.logSheets(installedName)
+                val file = withContext(Dispatchers.IO) {
+                    Exporter.write(context, Exporter.fileName("StorageInventory_log"), sheets)
+                }
+                ActivityLog.log("Activity log exported", "${sheets.first().rows.size} entries · ${file.name}")
+                Exporter.share(context, file, "Storage Inventory activity log")
+            } catch (e: Exception) {
+                ActivityLog.log("Activity log export failed", e.message ?: "")
+                logError = "Couldn't create the log file: ${e.message}"
+            }
+            logCount = ActivityLog.count()
+            logBusy = false
+        }
+    }
+
     fun downloadAndInstall(info: UpdateInfo) {
         if (!Updater.ensureInstallPermission(context)) {
+            ActivityLog.log("Install permission requested")
             permissionNote = true
             return
         }
+        ActivityLog.log("Downloading update", info.versionName)
         permissionNote = false
         state = UpdateState.Downloading(info, 0f)
         scope.launch {
@@ -985,8 +1067,10 @@ private fun SettingsScreen(store: InventoryStore, onBack: () -> Unit) {
                     scope.launch { state = UpdateState.Downloading(info, p) }
                 }
                 Updater.install(context, file)
+                ActivityLog.log("Update downloaded, installer opened", info.versionName)
                 UpdateState.Ready(info, file)
             } catch (e: Exception) {
+                ActivityLog.log("Update download failed", e.message ?: "")
                 UpdateState.Failed("Download failed: ${e.message ?: "unknown error"}")
             }
         }
@@ -1111,6 +1195,21 @@ private fun SettingsScreen(store: InventoryStore, onBack: () -> Unit) {
                 } else {
                     Text(urlText, style = MaterialTheme.typography.bodySmall)
                     TextButton(onClick = { editingUrl = true }) { Text("Change") }
+                }
+            }
+
+            SettingsCard(title = "Troubleshooting") {
+                Text(
+                    "Every action in the app is recorded with its date and time ($logCount entries kept on this phone).",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(onClick = { exportLog() }, enabled = !logBusy) {
+                    Text(if (logBusy) "Preparing…" else "Export activity log (Excel)")
+                }
+                logError?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
             }
 
@@ -1240,6 +1339,7 @@ private fun NodeRow(
     onPhoto: () -> Unit,
     onInfo: () -> Unit,
     onAssignQr: () -> Unit,
+    onExport: () -> Unit,
 ) {
     Card(
         modifier = Modifier
@@ -1290,6 +1390,7 @@ private fun NodeRow(
                 onPhoto = onPhoto,
                 onInfo = onInfo,
                 onAssignQr = if (node.hasQr) null else onAssignQr,
+                onExport = if (node.canHoldChildren) onExport else null,
             )
         }
     }
@@ -1323,6 +1424,7 @@ private fun OverflowMenu(
     onPhoto: () -> Unit,
     onInfo: () -> Unit,
     onAssignQr: (() -> Unit)? = null,
+    onExport: (() -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
     Box {
@@ -1333,6 +1435,9 @@ private fun OverflowMenu(
             DropdownMenuItem(text = { Text("Info") }, onClick = { open = false; onInfo() })
             if (onAssignQr != null) {
                 DropdownMenuItem(text = { Text("Assign QR code") }, onClick = { open = false; onAssignQr() })
+            }
+            if (onExport != null) {
+                DropdownMenuItem(text = { Text("Export to Excel") }, onClick = { open = false; onExport() })
             }
             DropdownMenuItem(
                 text = { Text(if (hasPhoto) "Retake photo" else "Take photo") },
@@ -1721,17 +1826,31 @@ private fun SearchScreen(
 
     LaunchedEffect(photoPath) {
         if (photoPath != null) {
+            ActivityLog.log("Searched by photo", "Started")
             try {
-                results = PhotoSimilarity.findSimilar(context, photoPath, store.nodes.toList()) { done, total ->
+                val found = PhotoSimilarity.findSimilar(context, photoPath, store.nodes.toList()) { done, total ->
                     progress = done to total
                 }
+                results = found
+                ActivityLog.log(
+                    "Photo search results",
+                    "${found.size} match(es)" + (found.firstOrNull()?.let { " · best: “${it.first.name}” ${(it.second * 100).toInt()}%" } ?: "")
+                )
             } catch (e: Exception) {
                 failure = e.message ?: "Photo search failed."
+                ActivityLog.log("Photo search failed", e.message ?: "")
             }
         }
     }
 
     val q = query.trim()
+    LaunchedEffect(q) {
+        if (q.isNotEmpty()) {
+            delay(1500)
+            val n = store.nodes.count { it.name.contains(q, ignoreCase = true) || (it.hasQr && it.qr.contains(q, ignoreCase = true)) }
+            ActivityLog.log("Searched by name", "“$q” · $n result(s)")
+        }
+    }
     val textMatches = if (q.isEmpty()) emptyList() else store.nodes
         .filter { it.name.contains(q, ignoreCase = true) || (it.hasQr && it.qr.contains(q, ignoreCase = true)) }
         .sortedBy { it.name.lowercase() }
@@ -1782,7 +1901,10 @@ private fun SearchScreen(
                     )
                 }
                 items(textMatches, key = { "t" + it.id }) { node ->
-                    SearchResultRow(store, node, null) { onOpen(node) }
+                    SearchResultRow(store, node, null) {
+                        ActivityLog.log("Opened search result", "“${node.name}” (name search)")
+                        onOpen(node)
+                    }
                 }
             } else if (photoPath != null) {
                 item {
@@ -1835,7 +1957,10 @@ private fun SearchScreen(
                             )
                         }
                         items(found, key = { "p" + it.first.id }) { (node, score) ->
-                            SearchResultRow(store, node, score) { onOpen(node) }
+                            SearchResultRow(store, node, score) {
+                                ActivityLog.log("Opened search result", "“${node.name}” (photo search, ${(score * 100).toInt()}%)")
+                                onOpen(node)
+                            }
                         }
                     }
                 }
@@ -1902,4 +2027,14 @@ private fun SearchResultRow(store: InventoryStore, node: Node, score: Float?, on
             }
         }
     }
+}
+
+private fun photoPurpose(target: String): String = when (target.substringBefore(SEP)) {
+    "S" -> "New storage"
+    "C" -> "New item/container"
+    "N" -> "Replace photo"
+    "P" -> "Item added by photo"
+    "T" -> "Temporary storage"
+    "Q" -> "Search by photo"
+    else -> target
 }

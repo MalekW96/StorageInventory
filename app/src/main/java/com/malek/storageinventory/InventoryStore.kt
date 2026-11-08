@@ -61,6 +61,7 @@ class InventoryStore(context: Context) {
         if (index >= 0) {
             nodes[index] = nodes[index].copy(qr = qr)
             save()
+            ActivityLog.log("QR code assigned", "“${nodes[index].name}” · QR $qr")
         }
     }
 
@@ -108,14 +109,22 @@ class InventoryStore(context: Context) {
         )
         nodes.add(node)
         save()
+        ActivityLog.log(
+            "Added ${typeWord(type)}",
+            "“${node.name}”" + (if (qr.isNotBlank()) " · QR $qr" else " · no QR") +
+                (parentId?.let { " · in ${path(it).joinToString(" › ") { p -> p.name }}" } ?: "") +
+                (if (photoPath != null) " · with photo" else " · no photo")
+        )
         return node
     }
 
     fun rename(id: String, newName: String) {
         val index = nodes.indexOfFirst { it.id == id }
         if (index >= 0) {
+            val old = nodes[index].name
             nodes[index] = nodes[index].copy(name = newName.trim())
             save()
+            ActivityLog.log("Renamed", "“$old” → “${newName.trim()}”")
         }
     }
 
@@ -127,11 +136,16 @@ class InventoryStore(context: Context) {
             nodes[index] = nodes[index].copy(photoPath = photoPath)
             save()
             if (old != null && old != photoPath) File(old).delete()
+            ActivityLog.log(if (old == null) "Photo added" else "Photo replaced", "“${nodes[index].name}”")
         }
     }
 
     /** Deletes a node and everything inside it. */
     fun delete(id: String) {
+        get(id)?.let { n ->
+            val (i, c) = countInside(id)
+            ActivityLog.log("Deleted ${typeWord(n.type)}", "“${n.name}” · with $i item(s), $c container(s) inside")
+        }
         val toRemove = HashSet<String>()
         val queue = ArrayDeque<String>()
         queue.add(id)
@@ -145,6 +159,12 @@ class InventoryStore(context: Context) {
         nodes.removeAll { it.id in toRemove }
         save()
         photos.forEach { File(it).delete() }
+    }
+
+    private fun typeWord(t: NodeType) = when (t) {
+        NodeType.STORAGE -> "storage"
+        NodeType.CONTAINER -> "container"
+        NodeType.ITEM -> "item"
     }
 
     private fun load() {
