@@ -1,6 +1,6 @@
 {
-  "versionCode": 4,
-  "versionName": "1.2.0.1",
-  "apkUrl": "https://github.com/MalekW96/StorageInventory/releases/download/v1.2.0.1/StorageInventory.apk",
-  "notes": "Cleaner rows: the QR code line is gone. New Info option in every ⋮ menu showing when an entry was added (dd/mm/yyyy hh:mm:ss, 24-hour), where it's stored and its QR code."
+  "versionCode": 5,
+  "versionName": "1.2.1.1",
+  "apkUrl": "https://github.com/MalekW96/StorageInventory/releases/download/v1.2.1.1/StorageInventory.apk",
+  "notes": "New Search: find things by name, by QR code, or by taking a photo (on-device AI finds similar-looking stored items). The + button now offers: take a photo to add to an existing storage, add a new storage (scan QR), or create a temporary storage (no QR yet; assign one later). Inside a storage, Add lets you scan a QR code or add by photo."
 }

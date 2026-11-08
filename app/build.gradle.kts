@@ -15,8 +15,8 @@ android {
         applicationId = "com.malek.storageinventory"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.2.0.1"
+        versionCode = 5
+        versionName = "1.2.1.1"
     }
 
     buildTypes {
@@ -56,6 +56,8 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("androidx.camera:camera-view:$camerax")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
+    // On-device image labelling, used by "Search by photo" (bundled model, works offline)
+    implementation("com.google.mlkit:image-labeling:17.0.9")
 }
 
 

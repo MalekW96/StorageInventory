@@ -1,5 +1,7 @@
 package com.malek.storageinventory
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -21,6 +23,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -91,6 +94,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -183,6 +187,10 @@ private sealed interface ScanMode {
     data object NewStorage : ScanMode
     data class AddTo(val parentId: String) : ScanMode
     data object Find : ScanMode
+    /** Pick the storage/container a photo-only item goes into. */
+    data object PickTarget : ScanMode
+    /** Attach a QR code to an entry created without one. */
+    data class AssignQr(val nodeId: String) : ScanMode
 }
 
 /** A scanned code waiting to be named (and maybe photographed) before it's saved. */
@@ -209,6 +217,14 @@ fun InventoryApp(store: InventoryStore) {
     // Navigation: empty = home, otherwise the ids of opened storages/containers.
     val stack = rememberSaveable(saver = stackSaver) { mutableListOf<String>().toMutableStateList() }
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var showSearch by rememberSaveable { mutableStateOf(false) }
+    var searchPhoto by rememberSaveable { mutableStateOf<String?>(null) }
+    // Photo-only item being added ("Take photo to add to existing storage")
+    var photoItemPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var photoItemTarget by rememberSaveable { mutableStateOf<String?>(null) }
+    // Temporary storage being created
+    var creatingTemp by rememberSaveable { mutableStateOf(false) }
+    var tempPhoto by rememberSaveable { mutableStateOf<String?>(null) }
     var scanMode by remember { mutableStateOf<ScanMode?>(null) }
 
     // Dialog state
@@ -248,6 +264,20 @@ fun InventoryApp(store: InventoryStore) {
                 if (isStorage) pendingStorageRaw = encoded else pendingChildRaw = encoded
             }
             "N" -> if (path != null) store.setPhoto(parts[1], path)
+            "P" -> if (path != null) {
+                photoItemPath?.let { if (it != path) File(it).delete() }
+                photoItemPath = path
+            } else if (photoItemPath == null) {
+                photoItemTarget = null
+            }
+            "T" -> if (path != null) {
+                tempPhoto?.let { File(it).delete() }
+                tempPhoto = path
+            }
+            "Q" -> if (path != null) {
+                searchPhoto?.let { File(it).delete() }
+                searchPhoto = path
+            }
         }
     }
 
@@ -260,7 +290,7 @@ fun InventoryApp(store: InventoryStore) {
         }
     }
 
-    fun takePhoto(target: String) {
+    fun launchCamera(target: String) {
         captureTarget = target
         try {
             cameraLauncher.launch(PhotoStore.captureUri(context))
@@ -269,6 +299,39 @@ fun InventoryApp(store: InventoryStore) {
             onPhotoResult(target, null)
             message = "Couldn't open the camera app. You can add a photo later from the item's menu."
         }
+    }
+
+    var permissionTarget by rememberSaveable { mutableStateOf<String?>(null) }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val target = permissionTarget ?: return@rememberLauncherForActivityResult
+        permissionTarget = null
+        if (granted) launchCamera(target) else {
+            onPhotoResult(target, null)
+            message = "Camera access is needed to take photos."
+        }
+    }
+
+    fun takePhoto(target: String) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            launchCamera(target)
+        } else {
+            permissionTarget = target
+            permissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    fun closeSearch() {
+        searchPhoto?.let { File(it).delete() }
+        searchPhoto = null
+        showSearch = false
+    }
+
+    fun clearPhotoItem() {
+        photoItemPath?.let { File(it).delete() }
+        photoItemPath = null
+        photoItemTarget = null
     }
 
     fun discardPending(raw: String?) {
@@ -291,7 +354,7 @@ fun InventoryApp(store: InventoryStore) {
         }
     }
 
-    BackHandler(enabled = stack.isNotEmpty() && scanMode == null && !showSettings) {
+    BackHandler(enabled = stack.isNotEmpty() && scanMode == null && !showSettings && !showSearch) {
         stack.removeAt(stack.lastIndex)
     }
 
@@ -299,10 +362,25 @@ fun InventoryApp(store: InventoryStore) {
         val current = currentId?.let { store.get(it) }
         when {
             showSettings -> SettingsScreen(store = store, onBack = { showSettings = false })
+            showSearch -> SearchScreen(
+                store = store,
+                photoPath = searchPhoto,
+                onTakePhoto = { takePhoto("Q") },
+                onClearPhoto = {
+                    searchPhoto?.let { File(it).delete() }
+                    searchPhoto = null
+                },
+                onScanQr = { scanMode = ScanMode.Find },
+                onOpen = { closeSearch(); openNode(it) },
+                onBack = { closeSearch() },
+            )
             current == null -> HomeScreen(
                 store = store,
+                onAddByPhoto = { photoItemTarget = null; takePhoto("P") },
                 onAdd = { scanMode = ScanMode.NewStorage },
-                onFind = { scanMode = ScanMode.Find },
+                onAddTemporary = { creatingTemp = true },
+                onFind = { showSearch = true },
+                onAssignQr = { scanMode = ScanMode.AssignQr(it.id) },
                 onSettings = { showSettings = true },
                 onOpen = { stack.add(it.id) },
                 onRename = { renaming = it },
@@ -315,6 +393,8 @@ fun InventoryApp(store: InventoryStore) {
                 node = current,
                 onBack = { stack.removeAt(stack.lastIndex) },
                 onScanAdd = { scanMode = ScanMode.AddTo(current.id) },
+                onPhotoAdd = { photoItemTarget = current.id; takePhoto("P") },
+                onAssignQr = { scanMode = ScanMode.AssignQr(it.id) },
                 onOpen = { child ->
                     if (child.canHoldChildren) stack.add(child.id) else viewingItem = child.id
                 },
@@ -335,6 +415,12 @@ fun InventoryApp(store: InventoryStore) {
                     "Scan the next QR code" to "Adding to “$parentName”. Scan the code on the item or smaller container."
                 }
                 ScanMode.Find -> "Find by QR code" to "Scan any code to jump to where it is stored."
+                ScanMode.PickTarget -> "Scan the storage's QR code" to
+                    "Scan the QR code of the storage or container to put this item in."
+                is ScanMode.AssignQr -> {
+                    val name = store.get(mode.nodeId)?.name ?: ""
+                    "Scan a QR code" to "The code will be attached to “$name”."
+                }
             }
             QrScannerScreen(
                 title = title,
@@ -344,7 +430,21 @@ fun InventoryApp(store: InventoryStore) {
                     scanMode = null
                     val existing = store.findByQr(qr)
                     when (mode) {
-                        ScanMode.Find -> if (existing != null) openNode(existing) else notFoundQr = qr
+                        ScanMode.Find -> if (existing != null) {
+                            closeSearch()
+                            openNode(existing)
+                        } else notFoundQr = qr
+                        ScanMode.PickTarget -> when {
+                            existing == null -> message = "That QR code isn't in your inventory yet. Pick a storage from the list instead."
+                            !existing.canHoldChildren -> message = "That code belongs to the item “${existing.name}”. Scan a storage or container instead."
+                            else -> photoItemTarget = existing.id
+                        }
+                        is ScanMode.AssignQr ->
+                            if (existing != null) duplicate = existing
+                            else store.get(mode.nodeId)?.let { node ->
+                                store.setQr(node.id, qr)
+                                message = "QR code attached to “${node.name}”."
+                            }
                         ScanMode.NewStorage ->
                             if (existing != null) duplicate = existing
                             else takePhoto("S$SEP$qr")
@@ -382,6 +482,60 @@ fun InventoryApp(store: InventoryStore) {
         )
     }
 
+    // Photo-only item: choose where it goes, then name it
+    val photoItem = photoItemPath
+    if (photoItem != null && scanMode == null) {
+        val target = photoItemTarget?.let { store.get(it) }
+        if (target == null) {
+            ChooseTargetDialog(
+                store = store,
+                photoPath = photoItem,
+                onPick = { photoItemTarget = it.id },
+                onScan = { scanMode = ScanMode.PickTarget },
+                onDismiss = { clearPhotoItem() },
+            )
+        } else {
+            AddChildDialog(
+                parentName = target.name,
+                qr = "",
+                photoPath = photoItem,
+                onTakePhoto = { takePhoto("P") },
+                onConfirm = { type, name ->
+                    store.add("", name, type, target.id, photoItem)
+                    photoItemPath = null
+                    photoItemTarget = null
+                    openNode(target)
+                },
+                onDismiss = { clearPhotoItem() },
+            )
+        }
+    }
+
+    // Temporary storage (no QR code yet)
+    if (creatingTemp) {
+        NameDialog(
+            title = "Create temporary storage",
+            message = "No QR code needed. You can attach one later with “Assign QR code” in its ⋮ menu.",
+            label = "Storage name",
+            confirmText = "Create",
+            photoPath = tempPhoto,
+            onTakePhoto = { takePhoto("T") },
+            onConfirm = { name ->
+                val storage = store.add("", name, NodeType.STORAGE, null, tempPhoto)
+                tempPhoto = null
+                creatingTemp = false
+                stack.clear()
+                stack.add(storage.id)
+                askStartAddingFor = storage.id
+            },
+            onDismiss = {
+                tempPhoto?.let { File(it).delete() }
+                tempPhoto = null
+                creatingTemp = false
+            },
+        )
+    }
+
     // 2) Storage created -> start adding items?
     askStartAddingFor?.let { id ->
         val storage = store.get(id)
@@ -391,7 +545,7 @@ fun InventoryApp(store: InventoryStore) {
             AlertDialog(
                 onDismissRequest = { askStartAddingFor = null },
                 title = { Text("“${storage.name}” is ready") },
-                text = { Text("Start adding items by scanning the next QR code.") },
+                text = { Text("Start adding items by scanning the next QR code. You can also add items by photo with the Add button.") },
                 confirmButton = {
                     TextButton(onClick = {
                         askStartAddingFor = null
@@ -562,8 +716,11 @@ fun InventoryApp(store: InventoryStore) {
 @Composable
 private fun HomeScreen(
     store: InventoryStore,
+    onAddByPhoto: () -> Unit,
     onAdd: () -> Unit,
+    onAddTemporary: () -> Unit,
     onFind: () -> Unit,
+    onAssignQr: (Node) -> Unit,
     onSettings: () -> Unit,
     onOpen: (Node) -> Unit,
     onRename: (Node) -> Unit,
@@ -580,11 +737,29 @@ private fun HomeScreen(
                 actions = {
                     if (storages.isNotEmpty()) {
                         IconButton(onClick = onFind) {
-                            Icon(Icons.Filled.Search, contentDescription = "Find by QR code")
+                            Icon(Icons.Filled.Search, contentDescription = "Search")
                         }
                     }
-                    IconButton(onClick = onAdd) {
-                        Icon(Icons.Filled.Add, contentDescription = "Add storage")
+                    var addMenu by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { addMenu = true }) {
+                            Icon(Icons.Filled.Add, contentDescription = "Add")
+                        }
+                        DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Take photo to add to existing storage") },
+                                enabled = storages.isNotEmpty(),
+                                onClick = { addMenu = false; onAddByPhoto() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Add new storage (scan QR code)") },
+                                onClick = { addMenu = false; onAdd() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Create temporary storage") },
+                                onClick = { addMenu = false; onAddTemporary() },
+                            )
+                        }
                     }
                     IconButton(onClick = onSettings) {
                         Icon(Icons.Filled.Settings, contentDescription = "Settings and updates")
@@ -596,7 +771,7 @@ private fun HomeScreen(
         if (storages.isEmpty()) {
             EmptyState(
                 title = "No Storage Data Available",
-                hint = "Tap + in the top right corner to scan a storage QR code.",
+                hint = "Tap + in the top right corner to add a storage.",
                 modifier = Modifier.padding(padding),
             )
         } else {
@@ -612,12 +787,13 @@ private fun HomeScreen(
                     val (items, containers) = store.countInside(storage.id)
                     NodeRow(
                         node = storage,
-                        detail = countText(items, containers),
+                        detail = (if (storage.isTemporary) "Temporary · " else "") + countText(items, containers),
                         onClick = { onOpen(storage) },
                         onRename = { onRename(storage) },
                         onDelete = { onDelete(storage) },
                         onPhoto = { onPhoto(storage) },
                         onInfo = { onInfo(storage) },
+                        onAssignQr = { onAssignQr(storage) },
                     )
                 }
             }
@@ -632,6 +808,8 @@ private fun DetailScreen(
     node: Node,
     onBack: () -> Unit,
     onScanAdd: () -> Unit,
+    onPhotoAdd: () -> Unit,
+    onAssignQr: (Node) -> Unit,
     onOpen: (Node) -> Unit,
     onRename: (Node) -> Unit,
     onDelete: (Node) -> Unit,
@@ -653,7 +831,7 @@ private fun DetailScreen(
                     Column {
                         Text(node.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
                         val crumbs = if (path.size > 1) path.dropLast(1).joinToString(" › ") { it.name }
-                        else typeLabel(node.type)
+                        else if (node.isTemporary) "Temporary storage" else typeLabel(node.type)
                         Text(
                             crumbs,
                             style = MaterialTheme.typography.bodySmall,
@@ -670,19 +848,33 @@ private fun DetailScreen(
                         onDelete = { onDelete(node) },
                         onPhoto = { onPhoto(node) },
                         onInfo = { onInfo(node) },
+                        onAssignQr = if (node.hasQr) null else ({ onAssignQr(node) }),
                     )
                 },
                 colors = barColors(),
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onScanAdd,
-                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                text = { Text("Scan to add") },
-                containerColor = MaterialTheme.colorScheme.secondary,
-                contentColor = Color(0xFF2B1A00),
-            )
+            var addOpen by remember { mutableStateOf(false) }
+            Box {
+                ExtendedFloatingActionButton(
+                    onClick = { addOpen = true },
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                    text = { Text("Add") },
+                    containerColor = MaterialTheme.colorScheme.secondary,
+                    contentColor = Color(0xFF2B1A00),
+                )
+                DropdownMenu(expanded = addOpen, onDismissRequest = { addOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Scan QR code") },
+                        onClick = { addOpen = false; onScanAdd() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Take photo (no QR code)") },
+                        onClick = { addOpen = false; onPhotoAdd() },
+                    )
+                }
+            }
         },
     ) { padding ->
         LazyColumn(
@@ -704,7 +896,7 @@ private fun DetailScreen(
             if (children.isEmpty()) {
                 item {
                     Text(
-                        "Nothing in here yet. Tap “Scan to add” and scan the QR code on an item or a smaller container.",
+                        "Nothing in here yet. Tap “Add” to scan an item's QR code or add it by photo.",
                         style = MaterialTheme.typography.bodyMedium,
                         textAlign = TextAlign.Center,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -736,6 +928,7 @@ private fun DetailScreen(
                         onDelete = { onDelete(child) },
                         onPhoto = { onPhoto(child) },
                         onInfo = { onInfo(child) },
+                        onAssignQr = { onAssignQr(child) },
                     )
                 }
             }
@@ -1046,6 +1239,7 @@ private fun NodeRow(
     onDelete: () -> Unit,
     onPhoto: () -> Unit,
     onInfo: () -> Unit,
+    onAssignQr: () -> Unit,
 ) {
     Card(
         modifier = Modifier
@@ -1095,6 +1289,7 @@ private fun NodeRow(
                 onDelete = onDelete,
                 onPhoto = onPhoto,
                 onInfo = onInfo,
+                onAssignQr = if (node.hasQr) null else onAssignQr,
             )
         }
     }
@@ -1127,6 +1322,7 @@ private fun OverflowMenu(
     onDelete: () -> Unit,
     onPhoto: () -> Unit,
     onInfo: () -> Unit,
+    onAssignQr: (() -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
     Box {
@@ -1135,6 +1331,9 @@ private fun OverflowMenu(
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(text = { Text("Info") }, onClick = { open = false; onInfo() })
+            if (onAssignQr != null) {
+                DropdownMenuItem(text = { Text("Assign QR code") }, onClick = { open = false; onAssignQr() })
+            }
             DropdownMenuItem(
                 text = { Text(if (hasPhoto) "Retake photo" else "Take photo") },
                 onClick = { open = false; onPhoto() },
@@ -1250,7 +1449,7 @@ private fun AddChildDialog(
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 DialogPhoto(photoPath, onTakePhoto)
                 Text(
-                    "QR code: $qr",
+                    if (qr.isBlank()) "No QR code (added by photo)" else "QR code: $qr",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
@@ -1370,7 +1569,7 @@ private fun InfoDialog(store: InventoryStore, node: Node, onDismiss: () -> Unit)
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 InfoRow("Name", node.name)
-                InfoRow("Type", typeLabel(node.type))
+                InfoRow("Type", if (node.isTemporary) "Temporary storage" else typeLabel(node.type))
                 InfoRow(
                     "Added",
                     if (node.createdAt > 0) addedFormat.format(Date(node.createdAt)) else "Unknown",
@@ -1380,7 +1579,10 @@ private fun InfoDialog(store: InventoryStore, node: Node, onDismiss: () -> Unit)
                     val (items, containers) = store.countInside(node.id)
                     InfoRow("Contains", countText(items, containers))
                 }
-                InfoRow("QR code", node.qr)
+                InfoRow(
+                    "QR code",
+                    if (node.hasQr) node.qr else "None yet (use “Assign QR code” in the ⋮ menu)",
+                )
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
@@ -1438,5 +1640,266 @@ private fun countText(items: Int, containers: Int): String {
     return if (containers == 0) i else {
         val c = if (containers == 1) "1 container" else "$containers containers"
         "$i · $c"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Search (text, photo similarity, QR) and target picker
+// ---------------------------------------------------------------------------
+
+/** "Add to which storage?" list for items added by photo. */
+@Composable
+private fun ChooseTargetDialog(
+    store: InventoryStore,
+    photoPath: String,
+    onPick: (Node) -> Unit,
+    onScan: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val targets = store.nodes
+        .filter { it.canHoldChildren }
+        .map { node -> node to store.path(node.id).joinToString(" › ") { it.name } }
+        .sortedBy { it.second.lowercase() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add to which storage?") },
+        text = {
+            Column {
+                PhotoImage(
+                    path = photoPath,
+                    maxPx = 600,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(120.dp)
+                        .clip(RoundedCornerShape(12.dp)),
+                )
+                Spacer(Modifier.height(8.dp))
+                Column(
+                    Modifier
+                        .heightIn(max = 300.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    targets.forEach { (node, label) ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { onPick(node) }
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            TypeBadge(node.type, small = true)
+                            Spacer(Modifier.width(10.dp))
+                            Text(label, style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                }
+                TextButton(onClick = onScan) { Text("Scan its QR code instead") }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SearchScreen(
+    store: InventoryStore,
+    photoPath: String?,
+    onTakePhoto: () -> Unit,
+    onClearPhoto: () -> Unit,
+    onScanQr: () -> Unit,
+    onOpen: (Node) -> Unit,
+    onBack: () -> Unit,
+) {
+    val context = LocalContext.current
+    var query by rememberSaveable { mutableStateOf("") }
+    var results by remember(photoPath) { mutableStateOf<List<Pair<Node, Float>>?>(null) }
+    var progress by remember(photoPath) { mutableStateOf(0 to 0) }
+    var failure by remember(photoPath) { mutableStateOf<String?>(null) }
+
+    BackHandler { onBack() }
+
+    LaunchedEffect(photoPath) {
+        if (photoPath != null) {
+            try {
+                results = PhotoSimilarity.findSimilar(context, photoPath, store.nodes.toList()) { done, total ->
+                    progress = done to total
+                }
+            } catch (e: Exception) {
+                failure = e.message ?: "Photo search failed."
+            }
+        }
+    }
+
+    val q = query.trim()
+    val textMatches = if (q.isEmpty()) emptyList() else store.nodes
+        .filter { it.name.contains(q, ignoreCase = true) || (it.hasQr && it.qr.contains(q, ignoreCase = true)) }
+        .sortedBy { it.name.lowercase() }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                title = { Text("Search", fontWeight = FontWeight.SemiBold) },
+                colors = barColors(),
+            )
+        },
+    ) { padding ->
+        LazyColumn(
+            contentPadding = PaddingValues(
+                start = 16.dp, end = 16.dp,
+                top = padding.calculateTopPadding() + 12.dp,
+                bottom = padding.calculateBottomPadding() + 24.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            item {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = { Text("Search by name") },
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onTakePhoto, modifier = Modifier.weight(1f)) { Text("Search by photo") }
+                    OutlinedButton(onClick = onScanQr, modifier = Modifier.weight(1f)) { Text("Scan QR code") }
+                }
+            }
+            if (q.isNotEmpty()) {
+                item {
+                    Text(
+                        "${textMatches.size} result${if (textMatches.size == 1) "" else "s"} for “$q”",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                items(textMatches, key = { "t" + it.id }) { node ->
+                    SearchResultRow(store, node, null) { onOpen(node) }
+                }
+            } else if (photoPath != null) {
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        PhotoImage(
+                            path = photoPath,
+                            maxPx = 300,
+                            modifier = Modifier
+                                .size(72.dp)
+                                .clip(RoundedCornerShape(10.dp)),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Your photo", style = MaterialTheme.typography.titleSmall)
+                            TextButton(onClick = onClearPhoto) { Text("Clear") }
+                        }
+                    }
+                }
+                val found = results
+                val problem = failure
+                when {
+                    problem != null -> item {
+                        Text(problem, color = MaterialTheme.colorScheme.error)
+                    }
+                    found == null -> item {
+                        Column {
+                            Text(
+                                if (progress.second > 0)
+                                    "Comparing with your stored photos… ${progress.first}/${progress.second}"
+                                else "Analysing your photo…",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            LinearProgressIndicator(Modifier.fillMaxWidth())
+                        }
+                    }
+                    found.isEmpty() -> item {
+                        Text(
+                            "No similar items found. Try a closer photo with the object filling most of the frame.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    else -> {
+                        item {
+                            Text(
+                                "Most similar",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        items(found, key = { "p" + it.first.id }) { (node, score) ->
+                            SearchResultRow(store, node, score) { onOpen(node) }
+                        }
+                    }
+                }
+            } else {
+                item {
+                    Text(
+                        "Type a name, take a photo to find similar-looking things you've stored, or scan a QR code.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchResultRow(store: InventoryStore, node: Node, score: Float?, onClick: () -> Unit) {
+    val location = store.path(node.id).dropLast(1).joinToString(" › ") { it.name }.ifEmpty { "Top level" }
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val photo = node.photoPath
+            if (photo != null) {
+                PhotoImage(
+                    path = photo,
+                    maxPx = 200,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(10.dp)),
+                )
+            } else {
+                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) { TypeBadge(node.type) }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(node.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    "${if (node.isTemporary) "Temporary storage" else typeLabel(node.type)} · $location",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (score != null) {
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "${(score * 100).toInt()}%",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
     }
 }

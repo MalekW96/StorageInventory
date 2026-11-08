@@ -24,6 +24,12 @@ data class Node(
     val photoPath: String? = null,
 ) {
     val canHoldChildren: Boolean get() = type != NodeType.ITEM
+
+    /** Entries made without a QR code (photo-only items, temporary storages). */
+    val hasQr: Boolean get() = qr.isNotBlank()
+
+    /** A storage created without a QR label yet. */
+    val isTemporary: Boolean get() = type == NodeType.STORAGE && !hasQr
 }
 
 /** Keeps the inventory in memory (observable by Compose) and saves it to a JSON file on the phone. */
@@ -46,7 +52,17 @@ class InventoryStore(context: Context) {
 
     fun get(id: String): Node? = nodes.firstOrNull { it.id == id }
 
-    fun findByQr(qr: String): Node? = nodes.firstOrNull { it.qr == qr }
+    fun findByQr(qr: String): Node? =
+        if (qr.isBlank()) null else nodes.firstOrNull { it.qr == qr }
+
+    /** Attaches a QR code to an entry that was created without one. */
+    fun setQr(id: String, qr: String) {
+        val index = nodes.indexOfFirst { it.id == id }
+        if (index >= 0) {
+            nodes[index] = nodes[index].copy(qr = qr)
+            save()
+        }
+    }
 
     /** Path from the top-level storage down to (and including) this node. */
     fun path(id: String): List<Node> {
