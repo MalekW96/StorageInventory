@@ -1,5 +1,5 @@
 {
-  "version": "2.1.1.1",
-  "build": 2,
-  "notes": "Selecting bins: press and hold a bin on the main page; tick circles then appear on the left of every bin. Tap bins to tick them, then ☰ › Archive (or ☰ › Unarchive in Archived storage). The circles hide again when you finish or cancel."
+  "version": "2.3.1.1",
+  "build": 1,
+  "notes": "Accounts and sync: in Settings, sign in with Google or create an account with email and password. Your bins, items and photos then stay in sync across your phone, iPhone and computer. Signing in is optional; without it everything stays on this device like before."
 }

@@ -25,6 +25,8 @@ data class Node(
     val photoPaths: List<String> = emptyList(),
     /** Top-level bins put into long-term storage (shown under “Archived storage”). */
     val archived: Boolean = false,
+    /** Last change time (ms); the newest change wins when devices sync. */
+    val updatedAt: Long = createdAt,
 ) {
     /** The main (first) photo. */
     val photoPath: String? get() = photoPaths.firstOrNull()
@@ -42,7 +44,32 @@ data class Node(
 class InventoryStore(context: Context) {
 
     private val file = File(context.filesDir, "inventory.json")
+    private val tombFile = File(context.filesDir, "deleted.json")
+    val photoDir: File = File(context.filesDir, "photos").apply { mkdirs() }
     val nodes = mutableStateListOf<Node>()
+
+    /** Deleted entry id → deletion time, so deletions reach other devices. */
+    val tombstones = HashMap<String, Long>()
+
+    /** Called after every local change (for cloud sync). */
+    var onLocalChange: ((Node) -> Unit)? = null
+    var onLocalDelete: ((id: String, time: Long, photoPaths: List<String>) -> Unit)? = null
+    var onPhotoRemoved: ((photoPath: String) -> Unit)? = null
+
+    private fun now() = System.currentTimeMillis()
+
+    /** Replaces a node, stamps the change time, saves and reports it for sync. */
+    private fun change(index: Int, transform: (Node) -> Node): Node {
+        val updated = transform(nodes[index]).copy(updatedAt = now())
+        nodes[index] = updated
+        save()
+        onLocalChange?.invoke(updated)
+        return updated
+    }
+
+    /** Photo id used in the cloud = file name without “.jpg”. */
+    fun photoId(path: String): String = File(path).nameWithoutExtension
+    fun photoPath(id: String): String = File(photoDir, "$id.jpg").absolutePath
 
     init {
         load()
@@ -62,8 +89,7 @@ class InventoryStore(context: Context) {
     fun setArchived(id: String, archived: Boolean) {
         val index = nodes.indexOfFirst { it.id == id }
         if (index >= 0) {
-            nodes[index] = nodes[index].copy(archived = archived)
-            save()
+            change(index) { it.copy(archived = archived) }
             ActivityLog.log(if (archived) "Archived" else "Moved to active", "“${nodes[index].name}”")
         }
     }
@@ -82,8 +108,7 @@ class InventoryStore(context: Context) {
     fun setQr(id: String, qr: String) {
         val index = nodes.indexOfFirst { it.id == id }
         if (index >= 0) {
-            nodes[index] = nodes[index].copy(qr = qr)
-            save()
+            change(index) { it.copy(qr = qr) }
             ActivityLog.log("QR code assigned", "“${nodes[index].name}” · QR $qr")
         }
     }
@@ -127,11 +152,12 @@ class InventoryStore(context: Context) {
             name = name.trim(),
             type = type,
             parentId = parentId,
-            createdAt = System.currentTimeMillis(),
+            createdAt = now(),
             photoPaths = photoPaths,
         )
         nodes.add(node)
         save()
+        onLocalChange?.invoke(node)
         ActivityLog.log(
             "Added ${typeWord(type)}",
             "“${node.name}”" + (if (qr.isNotBlank()) " · QR $qr" else " · no QR") +
@@ -145,8 +171,7 @@ class InventoryStore(context: Context) {
         val index = nodes.indexOfFirst { it.id == id }
         if (index >= 0) {
             val old = nodes[index].name
-            nodes[index] = nodes[index].copy(name = newName.trim())
-            save()
+            change(index) { it.copy(name = newName.trim()) }
             ActivityLog.log("Renamed", "“$old” → “${newName.trim()}”")
         }
     }
@@ -156,8 +181,7 @@ class InventoryStore(context: Context) {
         val index = nodes.indexOfFirst { it.id == id }
         if (index >= 0) {
             val n = nodes[index]
-            nodes[index] = n.copy(photoPaths = n.photoPaths + photoPath)
-            save()
+            change(index) { it.copy(photoPaths = it.photoPaths + photoPath) }
             ActivityLog.log("Photo added", "“${n.name}” · now ${n.photoPaths.size + 1} photo(s)")
         }
     }
@@ -167,9 +191,9 @@ class InventoryStore(context: Context) {
         val index = nodes.indexOfFirst { it.id == id }
         if (index >= 0) {
             val n = nodes[index]
-            nodes[index] = n.copy(photoPaths = n.photoPaths - photoPath)
-            save()
+            change(index) { it.copy(photoPaths = it.photoPaths - photoPath) }
             File(photoPath).delete()
+            onPhotoRemoved?.invoke(photoPath)
             ActivityLog.log("Photo deleted", "“${n.name}” · ${n.photoPaths.size - 1} photo(s) left")
         }
     }
@@ -189,10 +213,57 @@ class InventoryStore(context: Context) {
                 nodes.filter { it.parentId == current }.forEach { queue.add(it.id) }
             }
         }
-        val photos = nodes.filter { it.id in toRemove }.flatMap { it.photoPaths }
+        val gone = nodes.filter { it.id in toRemove }
+        val photos = gone.flatMap { it.photoPaths }
         nodes.removeAll { it.id in toRemove }
+        val t = now()
+        gone.forEach { tombstones[it.id] = t }
         save()
+        saveTombs()
         photos.forEach { File(it).delete() }
+        gone.forEach { onLocalDelete?.invoke(it.id, t, it.photoPaths) }
+    }
+
+    // ----- Changes coming from other devices (never reported back) -----
+
+    /** Inserts or replaces an entry received from the cloud. */
+    fun applyRemote(node: Node) {
+        val index = nodes.indexOfFirst { it.id == node.id }
+        if (index >= 0) {
+            val dropped = nodes[index].photoPaths - node.photoPaths.toSet()
+            nodes[index] = node
+            dropped.forEach { File(it).delete() }
+        } else nodes.add(node)
+        if (tombstones.remove(node.id) != null) saveTombs()
+        save()
+    }
+
+    /** Removes one entry deleted on another device. */
+    fun removeRemote(id: String) {
+        val n = get(id) ?: return
+        nodes.removeAll { it.id == id }
+        save()
+        n.photoPaths.forEach { File(it).delete() }
+    }
+
+    /** Wipes everything on this device (used when signing out with “Remove from device”). */
+    fun clearAll() {
+        val photos = nodes.flatMap { it.photoPaths }
+        nodes.clear()
+        tombstones.clear()
+        save()
+        saveTombs()
+        photos.forEach { File(it).delete() }
+    }
+
+    private fun saveTombs() {
+        try {
+            val o = JSONObject()
+            tombstones.forEach { (k, v) -> o.put(k, v) }
+            tombFile.writeText(o.toString())
+        } catch (e: Exception) {
+            Log.e("InventoryStore", "Could not save deletions", e)
+        }
     }
 
     private fun typeWord(t: NodeType) = when (t) {
@@ -223,6 +294,7 @@ class InventoryStore(context: Context) {
                             if (o.isNull("photoPath")) null else o.optString("photoPath").ifBlank { null }
                         ),
                         archived = o.optBoolean("archived", false),
+                        updatedAt = o.optLong("updatedAt", o.optLong("createdAt", 0L)),
                     )
                 )
             }
@@ -230,6 +302,14 @@ class InventoryStore(context: Context) {
             nodes.addAll(loaded)
         } catch (e: Exception) {
             Log.e("InventoryStore", "Could not read inventory file", e)
+        }
+        try {
+            if (tombFile.exists()) {
+                val o = JSONObject(tombFile.readText())
+                o.keys().forEach { k -> tombstones[k] = o.optLong(k) }
+            }
+        } catch (e: Exception) {
+            Log.e("InventoryStore", "Could not read deletions", e)
         }
     }
 
@@ -247,6 +327,7 @@ class InventoryStore(context: Context) {
                     .put("photos", JSONArray(n.photoPaths))
                     .put("photoPath", n.photoPath ?: JSONObject.NULL)
                     .put("archived", n.archived)
+                    .put("updatedAt", n.updatedAt)
             )
         }
         val json = JSONObject().put("version", 1).put("nodes", array).toString()

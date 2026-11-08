@@ -106,6 +106,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.material3.ButtonDefaults
+import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -152,6 +158,7 @@ class MainActivity : ComponentActivity() {
         )
         ActivityLog.init(applicationContext)
         val store = InventoryStore(applicationContext)
+        Cloud.init(applicationContext, store)
         setContent {
             InventoryTheme {
                 InventoryApp(store)
@@ -829,6 +836,21 @@ fun InventoryApp(store: InventoryStore) {
     }
 
     // QR already used
+    Cloud.accountConflict?.let { count ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Inventory from another account") },
+            text = {
+                Text(
+                    "This phone still has ${if (count == 1) "1 entry" else "$count entries"} from a different account. " +
+                        "Replace them with ${Cloud.userEmail}'s inventory, or add them to it?"
+                )
+            },
+            confirmButton = { TextButton(onClick = { Cloud.resolveConflict(replace = true) }) { Text("Replace") } },
+            dismissButton = { TextButton(onClick = { Cloud.resolveConflict(replace = false) }) { Text("Add them") } },
+        )
+    }
+
     duplicate?.let { node ->
         LaunchedEffect(node.id) { ActivityLog.log("Duplicate QR code", "Belongs to “${node.name}” · QR ${node.qr}") }
         val where = store.path(node.id).dropLast(1).joinToString(" › ") { it.name }
@@ -1259,6 +1281,7 @@ private fun SettingsScreen(store: InventoryStore, onBack: () -> Unit) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            AccountCard()
             SettingsCard(title = "App updates") {
                 Text(
                     "Installed version: $installedName (build $installedCode)",
@@ -1408,6 +1431,194 @@ private fun SettingsCard(title: String, content: @Composable () -> Unit) {
             content()
         }
     }
+}
+
+/** Sign in / sync status at the top of Settings. */
+@Composable
+private fun AccountCard() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var emailMode by remember { mutableStateOf<String?>(null) } // "signin" | "create"
+    var confirmSignOut by remember { mutableStateOf(false) }
+    var googleBusy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val email = Cloud.userEmail
+
+    SettingsCard(title = "Account & sync") {
+        if (email == null) {
+            Text(
+                "Sign in to keep your bins, items and photos in sync across your phone, tablet and computer.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextMuted,
+            )
+            Spacer(Modifier.height(12.dp))
+            Button(
+                onClick = {
+                    error = null
+                    googleBusy = true
+                    scope.launch {
+                        try {
+                            if (Cloud.signInGoogle(context)) Toast.makeText(context, "Signed in · syncing", Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {
+                            ActivityLog.log("Sign-in failed", "Google · ${e.message}")
+                            error = Cloud.errorText(e)
+                        }
+                        googleBusy = false
+                    }
+                },
+                enabled = !googleBusy,
+                colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color(0xFF1F1F1F)),
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(if (googleBusy) "Opening Google…" else "Continue with Google", fontWeight = FontWeight.SemiBold) }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { error = null; emailMode = "signin" }, modifier = Modifier.weight(1f)) { Text("Sign in with email") }
+                OutlinedButton(onClick = { error = null; emailMode = "create" }, modifier = Modifier.weight(1f)) { Text("Create account") }
+            }
+            error?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+        } else {
+            Text(buildString { append("Signed in as "); append(email) }, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            Text("(${Cloud.provider})", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+            Spacer(Modifier.height(8.dp))
+            val (dot, label) = when (Cloud.status) {
+                Cloud.Status.SYNCED -> Color(0xFF5BC27A) to ("Synced" + if (Cloud.lastSync > 0)
+                    " · " + SimpleDateFormat("HH:mm", Locale.US).format(Date(Cloud.lastSync)) else "")
+                Cloud.Status.SYNCING -> Brass to "Syncing…"
+                Cloud.Status.OFFLINE -> TextFaint to "Offline · changes will sync when you’re back online"
+                Cloud.Status.ERROR -> Danger to "Sync problem: ${Cloud.message}"
+                else -> Brass to "Connecting…"
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(dot))
+                Spacer(Modifier.width(8.dp))
+                Text(label, style = MaterialTheme.typography.bodySmall, color = TextMuted)
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { Cloud.syncNow() }, modifier = Modifier.weight(1f)) { Text("Sync now") }
+                OutlinedButton(onClick = { confirmSignOut = true }, modifier = Modifier.weight(1f)) { Text("Sign out") }
+            }
+        }
+    }
+
+    emailMode?.let { mode -> EmailSignInDialog(create = mode == "create", onDismiss = { emailMode = null }) }
+
+    if (confirmSignOut) {
+        AlertDialog(
+            onDismissRequest = { confirmSignOut = false },
+            title = { Text("Sign out?") },
+            text = { Text("Your inventory stays safe in your account ($email). Keep a copy on this phone too?") },
+            confirmButton = {
+                TextButton(onClick = { confirmSignOut = false; Cloud.signOut(removeFromDevice = false) }) { Text("Keep copy") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { confirmSignOut = false }) { Text("Cancel") }
+                    TextButton(onClick = { confirmSignOut = false; Cloud.signOut(removeFromDevice = true) }) {
+                        Text("Remove from phone", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun EmailSignInDialog(create: Boolean, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var password2 by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var info by remember { mutableStateOf<String?>(null) }
+
+    fun submit() {
+        val e = email.trim()
+        if (e.isEmpty() || password.isEmpty()) { error = "Enter your email and password."; return }
+        if (create && password != password2) { error = "The passwords don’t match."; return }
+        busy = true; error = null
+        scope.launch {
+            try {
+                if (create) Cloud.createAccount(e, password) else Cloud.signInEmail(e, password)
+                Toast.makeText(context, if (create) "Account created · syncing" else "Signed in · syncing", Toast.LENGTH_SHORT).show()
+                onDismiss()
+            } catch (ex: Exception) {
+                ActivityLog.log("Sign-in failed", "${if (create) "create" else "email"} · ${ex.message}")
+                error = Cloud.errorText(ex)
+            }
+            busy = false
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text(if (create) "Create account" else "Sign in with email") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    if (create) "Use any email address. Your inventory will sync to every device you sign in on."
+                    else "Use the email and password of your Storage Inventory account.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextMuted,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = email, onValueChange = { email = it }, label = { Text("Email") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = password, onValueChange = { password = it }, label = { Text("Password") }, singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = if (create) ImeAction.Next else ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { submit() }),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (create) {
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = password2, onValueChange = { password2 = it }, label = { Text("Repeat password") }, singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { submit() }),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                error?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                info?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = TextMuted, style = MaterialTheme.typography.bodySmall)
+                }
+                if (!create) {
+                    TextButton(onClick = {
+                        val e = email.trim()
+                        if (e.isEmpty()) {
+                            error = "Type your email address first, then tap “Forgot password?”."
+                        } else scope.launch {
+                            try {
+                                Cloud.resetPassword(e)
+                                error = null
+                                info = "If an account exists for $e, a password reset link is on its way. Check your inbox (and spam)."
+                            } catch (ex: Exception) { error = Cloud.errorText(ex) }
+                        }
+                    }, contentPadding = PaddingValues(0.dp)) { Text("Forgot password?") }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { submit() }, enabled = !busy) { Text(if (busy) "Please wait…" else if (create) "Create account" else "Sign in") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
+    )
 }
 
 // ---------------------------------------------------------------------------

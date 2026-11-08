@@ -15,8 +15,8 @@ android {
         applicationId = "com.malek.storageinventory"
         minSdk = 26
         targetSdk = 35
-        versionCode = 12
-        versionName = "2.1.1.1"
+        versionCode = 13
+        versionName = "2.3.1.1"
     }
 
     buildTypes {
@@ -58,6 +58,16 @@ dependencies {
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
     // On-device image labelling, used by "Search by photo" (bundled model, works offline)
     implementation("com.google.mlkit:image-labeling:17.0.9")
+
+    // Account sign-in + cloud sync (Firebase), Google sign-in via Credential Manager
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-firestore")
+    implementation("androidx.credentials:credentials:1.3.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
+    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
+    // Firebase pulls in an empty "listenablefuture" stub; CameraX needs the real ListenableFuture.
+    implementation("com.google.guava:guava:33.3.1-android")
 }
 
 

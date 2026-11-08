@@ -102,7 +102,9 @@ fun PhotoImage(
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Crop,
 ) {
-    val bitmap by produceState<ImageBitmap?>(initialValue = null, path, maxPx) {
+    // Reload when a photo arrives from another device (cloud sync).
+    val version = Cloud.photoVersion
+    val bitmap by produceState<ImageBitmap?>(initialValue = null, path, maxPx, version) {
         value = withContext(Dispatchers.IO) { PhotoStore.load(path, maxPx)?.asImageBitmap() }
     }
     val bmp = bitmap
