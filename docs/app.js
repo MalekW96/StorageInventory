@@ -2,8 +2,8 @@
  * Everything is stored on the device (IndexedDB). No account, no server. */
 'use strict';
 
-const APP_VERSION = '2.1.1.1';
-const APP_BUILD = 2; // bumped for updates published under the same version number
+const APP_VERSION = '2.3.1.1';
+const APP_BUILD = 1; // bumped for updates published under the same version number
 
 // ===========================================================================
 // Small helpers
@@ -59,7 +59,7 @@ const DB = {
   db: null,
   open() {
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open('storage-inventory', 2);
+      const req = indexedDB.open('storage-inventory', 3);
       req.onupgradeneeded = () => {
         const db = req.result;
         const have = db.objectStoreNames;
@@ -67,6 +67,7 @@ const DB = {
         if (!have.contains('photos')) db.createObjectStore('photos', { keyPath: 'id' });
         if (!have.contains('features')) db.createObjectStore('features', { keyPath: 'id' });
         if (!have.contains('log')) db.createObjectStore('log', { keyPath: 'n', autoIncrement: true });
+        if (!have.contains('tombs')) db.createObjectStore('tombs', { keyPath: 'id' }); // deleted entries, for sync
       };
       req.onsuccess = () => { this.db = req.result; resolve(); };
       req.onerror = () => reject(req.error);
@@ -125,11 +126,14 @@ const Store = {
     this.nodes = await DB.all('nodes');
     // Versions before 1.4.2.1 kept a single photoId; convert to a list.
     for (const n of this.nodes) {
+      let dirty = false;
       if (!Array.isArray(n.photoIds)) {
         n.photoIds = n.photoId ? [n.photoId] : [];
         delete n.photoId;
-        await DB.put('nodes', n);
+        dirty = true;
       }
+      if (!n.updatedAt) { n.updatedAt = n.createdAt || Date.now(); dirty = true; }
+      if (dirty) await DB.put('nodes', n);
     }
   },
   get(id) { return this.nodes.find((n) => n.id === id) || null; },
@@ -162,9 +166,11 @@ const Store = {
     return { items, containers };
   },
   async add({ qr = '', name, type, parentId = null, photoIds = [] }) {
-    const node = { id: uid(), qr, name: name.trim(), type, parentId, createdAt: Date.now(), photoIds: [...photoIds] };
+    const now = Date.now();
+    const node = { id: uid(), qr, name: name.trim(), type, parentId, createdAt: now, updatedAt: now, photoIds: [...photoIds] };
     this.nodes.push(node);
     await DB.put('nodes', node);
+    Sync.pushNode(node);
     Log.add(`Added ${type.toLowerCase()}`, `“${node.name}”` + (qr ? ` · QR ${qr}` : ' · no QR') +
       (parentId ? ` · in ${this.path(parentId).map((p) => p.name).join(' › ')}` : '') + (photoIds.length ? ` · ${photoIds.length} photo(s)` : ' · no photo'));
     return node;
@@ -173,8 +179,9 @@ const Store = {
     const n = this.get(id);
     if (!n) return;
     const before = { ...n };
-    Object.assign(n, patch);
+    Object.assign(n, patch, { updatedAt: Date.now() });
     await DB.put('nodes', n);
+    Sync.pushNode(n);
     if ('name' in patch) Log.add('Renamed', `“${before.name}” → “${n.name}”`);
     if ('qr' in patch) Log.add('QR code assigned', `“${n.name}” · QR ${n.qr}`);
     if ('archived' in patch) Log.add(n.archived ? 'Archived' : 'Moved to active', `“${n.name}”`);
@@ -183,15 +190,20 @@ const Store = {
     const n = this.get(id);
     if (!n) return;
     n.photoIds = [...photosOf(n), photoId];
+    n.updatedAt = Date.now();
     await DB.put('nodes', n);
+    Sync.pushNode(n);
     Log.add('Photo added', `“${n.name}” · now ${n.photoIds.length} photo(s)`);
   },
   async removePhoto(id, photoId) {
     const n = this.get(id);
     if (!n) return;
     n.photoIds = photosOf(n).filter((p) => p !== photoId);
+    n.updatedAt = Date.now();
     await DB.put('nodes', n);
     await Photos.remove(photoId);
+    Sync.pushNode(n);
+    Sync.deletePhoto(photoId);
     Log.add('Photo deleted', `“${n.name}” · ${n.photoIds.length} photo(s) left`);
   },
   async remove(id) {
@@ -210,10 +222,21 @@ const Store = {
     }
     const gone = this.nodes.filter((n) => remove.has(n.id));
     this.nodes = this.nodes.filter((n) => !remove.has(n.id));
+    const t = Date.now();
     for (const n of gone) {
       await DB.del('nodes', n.id);
+      await DB.put('tombs', { id: n.id, t });
       for (const p of photosOf(n)) await Photos.remove(p);
+      Sync.pushDelete(n.id, t, photosOf(n));
     }
+  },
+  /** Applies a deletion that came from another device (no sync back). */
+  async removeLocal(id) {
+    const n = this.get(id);
+    if (!n) return;
+    this.nodes = this.nodes.filter((x) => x.id !== id);
+    await DB.del('nodes', id);
+    for (const p of photosOf(n)) await Photos.remove(p);
   },
 };
 
@@ -240,18 +263,17 @@ function scaleToBlob(source, w, h, maxSide, quality = 0.85) {
 const Photos = {
   urls: new Map(),
   /** Saves an image (canvas, video frame, or image element) and returns its id. */
-  async save(source, w, h) {
+  async save(source, w, h, id = uid()) {
     const full = await scaleToBlob(source, w, h, 1600);
     const thumb = await scaleToBlob(source, w, h, 260, 0.8);
-    const id = uid();
     await DB.put('photos', { id, full, thumb });
     return id;
   },
-  async saveBlob(blob) {
+  async saveBlob(blob, id) {
     const url = URL.createObjectURL(blob);
     try {
       const img = await loadImage(url);
-      return await this.save(img, img.naturalWidth, img.naturalHeight);
+      return await this.save(img, img.naturalWidth, img.naturalHeight, id || uid());
     } finally { URL.revokeObjectURL(url); }
   },
   async url(id, kind = 'thumb') {
@@ -971,6 +993,7 @@ function renderSettings() {
       ${u.notes ? `<p class="hint">${esc(u.notes)}</p>` : ''}<button class="btn" data-act="apply-update">Update now</button>`;
   else if (u.status === 'error') updateHtml = `<p style="color:var(--error)">${esc(u.message)}</p>`;
   return topbar({ title: 'Settings', backBtn: true }) + `<main class="content"><div class="list">
+    ${accountCard()}
     <div class="card" style="padding:16px">
       <div class="name" style="font-weight:600;font-size:17px">App updates</div>
       <p>Installed version: ${APP_VERSION} (web)</p>
@@ -982,7 +1005,7 @@ function renderSettings() {
       <p class="hint">In Safari, tap the Share button, then “Add to Home Screen”. The app then opens full screen, works offline, and iOS keeps its data safe.</p></div>`}
     <div class="card" style="padding:16px">
       <div style="font-weight:600;font-size:17px">Backup</div>
-      <p class="hint">Your inventory and photos are saved on this device only. Save a backup file now and then, or to move to another phone.</p>
+      <p class="hint">${Sync.user ? 'Your inventory is also kept in your account. A backup file is an extra copy you control.' : 'Your inventory and photos are saved on this device only. Sign in above to sync, or save a backup file now and then.'}</p>
       <div class="btn-row"><button class="btn outline" data-act="export">Save backup</button>
         <button class="btn outline" data-act="import">Restore backup</button></div>
     </div>
@@ -1443,6 +1466,7 @@ function importBackup() {
       await DB.put('nodes', { ...rest, photoIds: ids.map((id) => idMap.get(id)).filter(Boolean) });
     }
     await Store.load();
+    if (Sync.user) Sync.pushAll();
     Log.add('Backup restored', `${data.nodes.length} entries from ${fmtDate(data.exportedAt)}`);
     state.stack = []; state.screen = 'home';
     render();
@@ -1790,6 +1814,11 @@ document.addEventListener('click', (e) => {
   else if (a === 'search-qr') flowFindByQr();
   else if (a === 'clear-photo') { clearSearchPhoto(); render(); }
   else if (a === 'check-update') checkForUpdates(false);
+  else if (a === 'acct-google') Account.google();
+  else if (a === 'acct-email') Account.emailDialog('signin');
+  else if (a === 'acct-create') Account.emailDialog('create');
+  else if (a === 'acct-signout') Account.signOut();
+  else if (a === 'acct-sync') Sync.syncNow();
   else if (a === 'apply-update') applyUpdate();
   else if (a === 'export') exportBackup();
   else if (a === 'export-log') exportLogExcel();
@@ -1820,6 +1849,7 @@ window.addEventListener('resize', () => { if (!Camera.el.hidden) Camera.drawFind
     try { swReg = await navigator.serviceWorker.register('sw.js'); } catch (e) { console.warn('SW failed', e); }
   }
   checkForUpdates(true);
+  Sync.init();
 })();
 
 // ===========================================================================
@@ -1888,3 +1918,414 @@ function closeSwipe() {
   document.addEventListener('pointerup', end);
   document.addEventListener('pointercancel', end);
 })();
+
+// ===========================================================================
+// Account + cloud sync (Firebase Auth + Cloud Firestore)
+// Data layout: users/{uid}/nodes/{id}  and  users/{uid}/photos/{id} (base64 JPEG)
+// Last change wins per entry (updatedAt); deletions are kept as tombstones.
+// ===========================================================================
+const FIREBASE_CONFIG = {
+  apiKey: 'AIzaSyDMKtV9uIkopONzbdwYxdlKBFnbnVIqTFs',
+  authDomain: 'storageinventory-fd8ca.firebaseapp.com',
+  projectId: 'storageinventory-fd8ca',
+  storageBucket: 'storageinventory-fd8ca.firebasestorage.app',
+  messagingSenderId: '355071035442',
+  appId: '1:355071035442:web:7823deaa15df6a424ad42b',
+};
+const FIREBASE_SDK = 'https://www.gstatic.com/firebasejs/10.14.1/';
+
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+const lsSet = (k, v) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) { /* ignore */ } };
+
+let renderTimer = 0;
+function scheduleRender() { clearTimeout(renderTimer); renderTimer = setTimeout(() => render(), 250); }
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result).split(',')[1] || '');
+    fr.onerror = () => reject(fr.error);
+    fr.readAsDataURL(blob);
+  });
+}
+function base64ToBlob(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: 'image/jpeg' });
+}
+
+const Sync = {
+  fb: null, user: null, status: 'off', message: '', lastSync: 0, unsub: null, loading: null,
+  fetching: new Set(),
+
+  load() {
+    if (!this.loading) {
+      this.loading = (async () => {
+        const [A, U, F] = await Promise.all([
+          import(FIREBASE_SDK + 'firebase-app.js'),
+          import(FIREBASE_SDK + 'firebase-auth.js'),
+          import(FIREBASE_SDK + 'firebase-firestore.js'),
+        ]);
+        const app = A.initializeApp(FIREBASE_CONFIG);
+        const auth = U.getAuth(app);
+        let db;
+        try {
+          db = F.initializeFirestore(app, { localCache: F.persistentLocalCache({ tabManager: F.persistentMultipleTabManager() }) });
+        } catch (e) { db = F.getFirestore(app); }
+        this.fb = { A, U, F, app, auth, db };
+        U.getRedirectResult(auth).catch((e) => toast(Account.errorText(e)));
+        U.onAuthStateChanged(auth, (u) => this.onUser(u));
+        return this.fb;
+      })().catch((e) => { this.loading = null; throw e; });
+    }
+    return this.loading;
+  },
+
+  /** Restores the session on start if this device was signed in before. */
+  async init() {
+    if (!lsGet('cloudUser')) return;
+    this.setStatus('connecting');
+    try { await this.load(); } catch (e) { this.setStatus('offline', 'Sign-in service unreachable. Changes stay on this device until you are online.'); }
+  },
+
+  setStatus(status, message = '') {
+    this.status = status; this.message = message;
+    if (state.screen === 'settings') scheduleRender();
+  },
+
+  async onUser(u) {
+    if (this.unsub) { this.unsub(); this.unsub = null; }
+    this.user = u || null;
+    if (!u) { lsSet('cloudUser', null); this.setStatus('off'); return; }
+    const last = lsGet('cloudLastUid');
+    lsSet('cloudUser', u.uid);
+    lsSet('cloudLastUid', u.uid);
+    Log.add('Signed in', `${u.email || ''} (${Account.provider(u)})`);
+    if (last && last !== u.uid && Store.nodes.length) {
+      const replace = await confirmDialog({
+        title: 'Inventory from another account',
+        text: `This device still has ${plural(Store.nodes.length, 'entry')} from a different account. Replace them with ${u.email || 'this account'}'s inventory, or add them to it?`,
+        ok: 'Replace', cancel: 'Add them',
+      });
+      if (replace) await this.clearLocal();
+    }
+    this.setStatus('syncing');
+    this.listen();
+  },
+
+  col(name) { const { F, db } = this.fb; return F.collection(db, 'users', this.user.uid, name); },
+  ref(name, id) { const { F, db } = this.fb; return F.doc(db, 'users', this.user.uid, name, id); },
+
+  listen() {
+    const { F } = this.fb;
+    let merged = false;
+    this.unsub = F.onSnapshot(this.col('nodes'), { includeMetadataChanges: true }, async (snap) => {
+      try {
+        const changes = snap.docChanges().filter((c) => c.type !== 'removed').map((c) => c.doc.data());
+        if (changes.length) await this.applyRemote(changes);
+        if (!merged && !snap.metadata.fromCache) {
+          merged = true;
+          await this.pushLocal(snap.docs.map((d) => d.data()));
+        }
+        if (!snap.metadata.hasPendingWrites && !snap.metadata.fromCache) this.lastSync = Date.now();
+        this.setStatus(snap.metadata.hasPendingWrites ? 'syncing' : snap.metadata.fromCache ? (merged ? 'synced' : 'offline') : 'synced');
+      } catch (e) {
+        Log.add('Sync error', e.message || String(e));
+        this.setStatus('error', e.message || String(e));
+      }
+    }, (err) => {
+      Log.add('Sync error', err.message);
+      this.setStatus('error', err.message);
+    });
+  },
+
+  /** Brings changes made on other devices into this one. */
+  async applyRemote(list) {
+    let changed = false;
+    for (const r of list) {
+      if (!r || !r.id) continue;
+      const local = Store.get(r.id);
+      const rt = r.updatedAt || 0;
+      if (r.deleted) {
+        if (local && (local.updatedAt || 0) <= rt) { await Store.removeLocal(r.id); changed = true; }
+        continue;
+      }
+      const tomb = await DB.get('tombs', r.id);
+      if (tomb && tomb.t >= rt) continue; // deleted here more recently; pushLocal sends the deletion
+      if (local && (local.updatedAt || 0) >= rt) continue;
+      const node = {
+        id: r.id, qr: r.qr || '', name: r.name || '', type: r.type || 'ITEM', parentId: r.parentId || null,
+        createdAt: r.createdAt || rt, updatedAt: rt, photoIds: Array.isArray(r.photoIds) ? r.photoIds : [], archived: !!r.archived,
+      };
+      const dropped = local ? photosOf(local).filter((p) => !node.photoIds.includes(p)) : [];
+      if (local) Object.assign(local, node); else Store.nodes.push(node);
+      await DB.put('nodes', local || node);
+      if (tomb) await DB.del('tombs', r.id);
+      for (const p of dropped) await Photos.remove(p);
+      node.photoIds.forEach((p) => this.ensurePhoto(p));
+      changed = true;
+    }
+    if (changed) scheduleRender();
+  },
+
+  /** After sign-in: send what only this device has (or has newer). */
+  async pushLocal(remoteList) {
+    const remote = new Map(remoteList.map((r) => [r.id, r]));
+    let sent = 0;
+    for (const n of [...Store.nodes]) {
+      const r = remote.get(n.id);
+      if (!r || (n.updatedAt || 0) > (r.updatedAt || 0)) { await this.pushNode(n); sent++; }
+    }
+    for (const t of await DB.all('tombs')) {
+      const r = remote.get(t.id);
+      if (r && !r.deleted && (r.updatedAt || 0) <= t.t) { await this.writeDelete(t.id, t.t, []); sent++; }
+    }
+    if (sent) Log.add('Uploaded to account', `${sent} change(s) from this device`);
+  },
+
+  async pushAll() { for (const n of [...Store.nodes]) await this.pushNode(n); },
+
+  async pushNode(n) {
+    if (!this.user || !this.fb) return;
+    const { F } = this.fb;
+    const data = {
+      id: n.id, qr: n.qr || '', name: n.name, type: n.type, parentId: n.parentId || null,
+      createdAt: n.createdAt || 0, updatedAt: n.updatedAt || Date.now(), photoIds: photosOf(n), archived: !!n.archived, deleted: false,
+    };
+    try {
+      F.setDoc(this.ref('nodes', n.id), data).catch((e) => this.fail(e));
+      for (const p of data.photoIds) await this.uploadPhoto(p);
+    } catch (e) { this.fail(e); }
+  },
+
+  async pushDelete(id, t, photoIds = []) {
+    if (!this.user || !this.fb) return;
+    await this.writeDelete(id, t, photoIds);
+  },
+  async writeDelete(id, t, photoIds) {
+    const { F } = this.fb;
+    F.setDoc(this.ref('nodes', id), { id, deleted: true, updatedAt: t }).catch((e) => this.fail(e));
+    for (const p of photoIds) this.deletePhoto(p);
+  },
+
+  uploadedKey() { return 'cloudPhotos:' + (this.user ? this.user.uid : ''); },
+  uploadedSet() { try { return new Set(JSON.parse(lsGet(this.uploadedKey()) || '[]')); } catch (e) { return new Set(); } },
+  markUploaded(id, yes = true) {
+    const s = this.uploadedSet();
+    if (yes) s.add(id); else s.delete(id);
+    lsSet(this.uploadedKey(), JSON.stringify([...s]));
+  },
+
+  async uploadPhoto(id) {
+    if (!this.user || this.uploadedSet().has(id)) return;
+    const rec = await DB.get('photos', id);
+    if (!rec || !rec.full) return;
+    const url = URL.createObjectURL(rec.full);
+    try {
+      const img = await loadImage(url);
+      let blob = await scaleToBlob(img, img.naturalWidth, img.naturalHeight, 1280, 0.72);
+      if (blob.size > 700000) blob = await scaleToBlob(img, img.naturalWidth, img.naturalHeight, 900, 0.6);
+      const data = await blobToBase64(blob);
+      const { F } = this.fb;
+      await F.setDoc(this.ref('photos', id), { id, data, updatedAt: Date.now() });
+      this.markUploaded(id);
+    } catch (e) { this.fail(e); } finally { URL.revokeObjectURL(url); }
+  },
+
+  deletePhoto(id) {
+    if (!this.user || !this.fb) return;
+    this.markUploaded(id, false);
+    this.fb.F.deleteDoc(this.ref('photos', id)).catch(() => {});
+  },
+
+  /** Downloads a photo that another device added. */
+  async ensurePhoto(id) {
+    if (!id || this.fetching.has(id)) return;
+    if (await DB.get('photos', id)) return;
+    this.fetching.add(id);
+    try {
+      const snap = await this.fb.F.getDoc(this.ref('photos', id));
+      if (snap.exists() && snap.data().data) {
+        await Photos.saveBlob(base64ToBlob(snap.data().data), id);
+        this.markUploaded(id);
+        Photos.urls.delete(id + ':thumb'); Photos.urls.delete(id + ':full');
+        scheduleRender();
+      }
+    } catch (e) { console.warn('Photo download failed', id, e); } finally { this.fetching.delete(id); }
+  },
+
+  async syncNow() {
+    if (!this.user) return;
+    this.setStatus('syncing');
+    await this.pushAll();
+    for (const n of Store.nodes) photosOf(n).forEach((p) => this.ensurePhoto(p));
+    toast('Sync started');
+  },
+
+  fail(e) {
+    console.warn('Sync', e);
+    Log.add('Sync error', e && (e.code || e.message) || String(e));
+    if (e && e.code === 'permission-denied') this.setStatus('error', 'The account rejected the change (permission denied).');
+  },
+
+  async clearLocal() {
+    await DB.clear('nodes'); await DB.clear('photos'); await DB.clear('features'); await DB.clear('tombs');
+    Photos.urls.forEach((u) => URL.revokeObjectURL(u)); Photos.urls.clear();
+    Store.nodes = [];
+    state.stack = []; state.screen = 'settings';
+    render();
+  },
+};
+
+const Account = {
+  provider(u) {
+    const p = u && u.providerData && u.providerData[0];
+    return p && p.providerId === 'google.com' ? 'Google' : 'email';
+  },
+  errorText(e) {
+    const c = (e && e.code) || '';
+    const map = {
+      'auth/invalid-credential': 'Wrong email or password.',
+      'auth/wrong-password': 'Wrong email or password.',
+      'auth/user-not-found': 'No account with that email. Tap “Create account” instead.',
+      'auth/invalid-email': 'That email address doesn’t look right.',
+      'auth/email-already-in-use': 'An account with this email already exists. Use “Sign in” instead.',
+      'auth/weak-password': 'Choose a password with at least 6 characters.',
+      'auth/missing-password': 'Enter your password.',
+      'auth/network-request-failed': 'No internet connection. Try again when you’re online.',
+      'auth/too-many-requests': 'Too many attempts. Wait a few minutes and try again.',
+      'auth/popup-blocked': 'The sign-in window was blocked. Allow pop-ups and try again.',
+      'auth/account-exists-with-different-credential': 'This email is already used with a different sign-in method.',
+    };
+    return map[c] || (e && e.message) || 'Something went wrong.';
+  },
+
+  async google() {
+    let fb;
+    try { fb = await Sync.load(); } catch (e) { return alertDialog('Couldn’t reach the sign-in service. Check your internet connection.'); }
+    const { U, auth } = fb;
+    const provider = new U.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    try {
+      await U.signInWithPopup(auth, provider);
+      toast('Signed in');
+    } catch (e) {
+      if (e.code === 'auth/popup-closed-by-user' || e.code === 'auth/cancelled-popup-request') return;
+      if (e.code === 'auth/popup-blocked' || e.code === 'auth/operation-not-supported-in-this-environment') {
+        try { await U.signInWithRedirect(auth, provider); return; } catch (e2) { e = e2; }
+      }
+      Log.add('Sign-in failed', `Google · ${e.code || e.message}`);
+      alertDialog(this.errorText(e), 'Couldn’t sign in');
+    }
+  },
+
+  emailDialog(mode) {
+    const create = mode === 'create';
+    const close = dialog({
+      title: create ? 'Create account' : 'Sign in with email',
+      body: `<p class="small-muted">${create ? 'Use any email address. Your inventory will sync to every device you sign in on.' : 'Use the email and password of your Storage Inventory account.'}</p>
+        <label class="field"><span>Email</span><input id="a-email" type="email" autocomplete="email" autocapitalize="off" inputmode="email"></label>
+        <label class="field"><span>Password</span><input id="a-pass" type="password" autocomplete="${create ? 'new-password' : 'current-password'}"></label>
+        ${create ? '<label class="field"><span>Repeat password</span><input id="a-pass2" type="password" autocomplete="new-password"></label>' : ''}
+        <p class="auth-error" id="a-err" hidden></p>
+        ${create ? '' : '<button class="btn text" id="a-forgot" style="padding-left:0;margin-top:6px">Forgot password?</button>'}`,
+      actions: [
+        { label: 'Cancel', onClick: () => close() },
+        { label: create ? 'Create account' : 'Sign in', id: 'a-ok', onClick: () => submit() },
+      ],
+      onOpen: (scrim) => {
+        setTimeout(() => $('#a-email', scrim).focus(), 50);
+        const f = $('#a-forgot', scrim);
+        if (f) f.onclick = () => this.reset($('#a-email', scrim).value.trim());
+        scrim.querySelectorAll('input').forEach((i) => i.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); }));
+      },
+    });
+    const showErr = (t) => { const el = $('#a-err'); el.textContent = t; el.hidden = !t; };
+    const submit = async () => {
+      const email = $('#a-email').value.trim(), pass = $('#a-pass').value;
+      if (!email || !pass) return showErr('Enter your email and password.');
+      if (create && pass !== $('#a-pass2').value) return showErr('The passwords don’t match.');
+      const ok = $('#a-ok'); ok.disabled = true; showErr('');
+      try {
+        const { U, auth } = await Sync.load();
+        if (create) await U.createUserWithEmailAndPassword(auth, email, pass);
+        else await U.signInWithEmailAndPassword(auth, email, pass);
+        close();
+        toast(create ? 'Account created · syncing' : 'Signed in · syncing');
+      } catch (e) {
+        Log.add('Sign-in failed', `${create ? 'create' : 'email'} · ${e.code || e.message}`);
+        showErr(this.errorText(e));
+        ok.disabled = false;
+      }
+    };
+  },
+
+  async reset(email) {
+    if (!email) return alertDialog('Type your email address first, then tap “Forgot password?”.');
+    try {
+      const { U, auth } = await Sync.load();
+      await U.sendPasswordResetEmail(auth, email);
+      alertDialog(`If an account exists for ${email}, a password reset link is on its way. Check your inbox (and spam folder).`, 'Email sent');
+    } catch (e) { alertDialog(this.errorText(e)); }
+  },
+
+  async signOut() {
+    const u = Sync.user;
+    if (!u) return;
+    const choice = await new Promise((resolve) => {
+      const close = dialog({
+        title: 'Sign out?',
+        body: `<p>Your inventory stays safe in your account (${esc(u.email || '')}). Keep a copy on this device too?</p>`,
+        onDismiss: () => resolve(null),
+        actions: [
+          { label: 'Cancel', onClick: () => { close(); resolve(null); } },
+          { label: 'Remove from device', kind: 'danger', onClick: () => { close(); resolve('clear'); } },
+          { label: 'Keep copy', onClick: () => { close(); resolve('keep'); } },
+        ],
+      });
+    });
+    if (!choice) return;
+    const { U, F, auth, db } = Sync.fb;
+    await U.signOut(auth);
+    Log.add('Signed out', choice === 'clear' ? 'removed data from device' : 'kept a copy on device');
+    if (choice === 'clear') {
+      await Sync.clearLocal();
+      try { await F.terminate(db); await F.clearIndexedDbPersistence(db); } catch (e) { /* ignore */ }
+      lsSet('cloudLastUid', null);
+      location.reload();
+    } else {
+      // The copy is now just local data; a later sign-in with another account will ask what to do.
+      render();
+    }
+  },
+};
+
+function accountCard() {
+  const u = Sync.user;
+  if (!u) {
+    const connecting = Sync.status === 'connecting';
+    return `<div class="card account" style="padding:16px">
+      <div style="font-weight:600;font-size:17px">Account &amp; sync</div>
+      <p class="hint">Sign in to keep your bins, items and photos in sync across your phone, tablet and computer.</p>
+      ${connecting ? '<p class="hint">Connecting…</p>' : ''}
+      ${Sync.status === 'offline' ? `<p class="hint">${esc(Sync.message)}</p>` : ''}
+      <button class="btn google-btn" data-act="acct-google"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M22.5 12.3c0-.8-.1-1.5-.2-2.2H12v4.2h5.9a5 5 0 0 1-2.2 3.3v2.7h3.5c2.1-1.9 3.3-4.7 3.3-8z"/><path fill="#34A853" d="M12 23c3 0 5.4-1 7.2-2.7l-3.5-2.7c-1 .7-2.2 1.1-3.7 1.1-2.9 0-5.3-1.9-6.2-4.5H2.2v2.8A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.8 14.2a6.6 6.6 0 0 1 0-4.3V7.1H2.2a11 11 0 0 0 0 9.9z"/><path fill="#EA4335" d="M12 5.4c1.6 0 3.1.6 4.2 1.7l3.2-3.2A11 11 0 0 0 2.2 7.1l3.6 2.8C6.7 7.3 9.1 5.4 12 5.4z"/></svg>Continue with Google</button>
+      <div class="btn-row"><button class="btn outline" data-act="acct-email">Sign in with email</button>
+        <button class="btn outline" data-act="acct-create">Create account</button></div>
+    </div>`;
+  }
+  const st = Sync.status;
+  const status = st === 'synced' ? `<span class="sync-dot ok"></span>Synced${Sync.lastSync ? ' · ' + new Date(Sync.lastSync).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}`
+    : st === 'syncing' ? '<span class="sync-dot busy"></span>Syncing…'
+    : st === 'offline' ? '<span class="sync-dot off"></span>Offline · changes will sync when you’re back online'
+    : st === 'error' ? `<span class="sync-dot err"></span>Sync problem: ${esc(Sync.message)}`
+    : '<span class="sync-dot busy"></span>Connecting…';
+  return `<div class="card account" style="padding:16px">
+    <div style="font-weight:600;font-size:17px">Account &amp; sync</div>
+    <p style="margin:6px 0 2px">Signed in as <b>${esc(u.email || u.displayName || 'your account')}</b> <span class="small-muted">(${Account.provider(u)})</span></p>
+    <p class="hint sync-status">${status}</p>
+    <div class="btn-row"><button class="btn outline" data-act="acct-sync">Sync now</button>
+      <button class="btn outline" data-act="acct-signout">Sign out</button></div>
+  </div>`;
+}

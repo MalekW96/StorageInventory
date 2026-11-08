@@ -1,5 +1,5 @@
 /* Service worker: makes the app work offline and lets "Check for updates" install new versions. */
-const VERSION = '2.1.1.1-2';
+const VERSION = '2.3.1.1';
 const CACHE = 'si-' + VERSION;
 const MODELS = 'si-models';
 const SHELL = [
@@ -42,6 +42,18 @@ self.addEventListener('fetch', (e) => {
       if (hit) return hit;
       const res = await fetch(req);
       if (res.ok || res.type === 'opaque') c.put(req, res.clone());
+      return res;
+    }));
+    return;
+  }
+
+  // Firebase SDK (sign-in + sync): keep a copy so the app starts offline when signed in.
+  if (url.hostname === 'www.gstatic.com' && url.pathname.startsWith('/firebasejs/')) {
+    e.respondWith(caches.open(MODELS).then(async (c) => {
+      const hit = await c.match(req);
+      if (hit) return hit;
+      const res = await fetch(req);
+      if (res.ok) c.put(req, res.clone());
       return res;
     }));
     return;

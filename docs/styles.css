@@ -303,3 +303,17 @@ button { cursor: pointer; }
 .archived-note { display: flex; gap: 10px; align-items: flex-start; background: rgba(201, 163, 93, 0.10); color: var(--brass-hi, #E2C27F);
   border-radius: 12px; padding: 10px 12px; margin: 0 0 12px; font-size: 14px; line-height: 1.35; }
 .archived-note svg { width: 18px; height: 18px; flex: none; margin-top: 1px; }
+
+/* Account & sync */
+.google-btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; margin-top: 12px;
+  background: #fff; color: #1f1f1f; border: 0; font-weight: 600; }
+.google-btn svg { width: 20px; height: 20px; }
+.account .btn-row { margin-top: 10px; }
+.auth-error { color: var(--danger); font-size: 14px; margin: 10px 0 0; }
+.sync-status { display: flex; align-items: center; gap: 8px; }
+.sync-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--faint); }
+.sync-dot.ok { background: #5BC27A; }
+.sync-dot.busy { background: var(--brass); animation: pulse 1s ease-in-out infinite alternate; }
+.sync-dot.off { background: var(--faint); }
+.sync-dot.err { background: var(--danger); }
+@keyframes pulse { from { opacity: .35; } to { opacity: 1; } }
