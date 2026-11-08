@@ -106,6 +106,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
@@ -274,6 +280,9 @@ fun InventoryApp(store: InventoryStore) {
     val stack = rememberSaveable(saver = stackSaver) { mutableListOf<String>().toMutableStateList() }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showArchived by rememberSaveable { mutableStateOf(false) }
+    var selecting by rememberSaveable { mutableStateOf(false) }
+    val selected = remember { mutableStateListOf<String>() }
+    fun endSelect() { selecting = false; selected.clear() }
     var showSearch by rememberSaveable { mutableStateOf(false) }
     var searchPhoto by rememberSaveable { mutableStateOf<String?>(null) }
     // Photo-only item being added ("Take photo to add to existing storage")
@@ -400,6 +409,13 @@ fun InventoryApp(store: InventoryStore) {
     }
 
     fun openNode(node: Node) {
+        // Archived bins can't be opened: show the entry's details instead.
+        if (store.isArchived(node.id)) {
+            stack.clear()
+            if (node.canHoldChildren) infoFor = node.id else viewingItem = node.id
+            ActivityLog.log("Viewed archived entry", "“${node.name}”")
+            return
+        }
         // Items open their containing storage/container.
         val target = if (node.canHoldChildren) node else node.parentId?.let { store.get(it) }
         stack.clear()
@@ -443,6 +459,7 @@ fun InventoryApp(store: InventoryStore) {
         ActivityLog.log("Opened screen", screenName)
     }
 
+    BackHandler(enabled = selecting && stack.isEmpty() && scanMode == null && !showSettings && !showSearch) { endSelect() }
     BackHandler(enabled = stack.isNotEmpty() && scanMode == null && !showSettings && !showSearch) {
         stack.removeAt(stack.lastIndex)
     }
@@ -466,11 +483,28 @@ fun InventoryApp(store: InventoryStore) {
             current == null -> HomeScreen(
                 store = store,
                 archivedView = showArchived,
+                selecting = selecting,
+                selected = selected,
                 onNewBin = { showNewBin = true },
-                onFind = { showSearch = true },
-                onShowActive = { showArchived = false; ActivityLog.log("Opened screen", "Active storage") },
-                onShowArchived = { showArchived = true; ActivityLog.log("Opened screen", "Archived storage") },
-                onSettings = { showSettings = true },
+                onFind = { endSelect(); showSearch = true },
+                onShowActive = { endSelect(); showArchived = false; ActivityLog.log("Opened screen", "Active storage") },
+                onShowArchived = { endSelect(); showArchived = true; ActivityLog.log("Opened screen", "Archived storage") },
+                onSettings = { endSelect(); showSettings = true },
+                onToggleSelect = { node ->
+                    if (!selecting) ActivityLog.log("Started selecting", "“${node.name}”")
+                    selecting = true
+                    if (node.id in selected) selected.remove(node.id) else selected.add(node.id)
+                },
+                onStartSelect = { selecting = true },
+                onCancelSelect = { endSelect() },
+                onSelectAll = { ids -> ids.forEach { if (it !in selected) selected.add(it) } },
+                onClearSelection = { selected.clear() },
+                onArchiveSelected = { ids, toArchive ->
+                    ids.forEach { store.setArchived(it, toArchive) }
+                    val what = if (ids.size == 1) "“${store.get(ids[0])?.name}”" else "${ids.size} bins"
+                    message = if (toArchive) "$what moved to Archived storage (☰ › Archived storage)." else "$what back in Active storage."
+                    endSelect()
+                },
                 onOpen = { stack.add(it.id) },
                 onOptions = { optionsFor = it.id },
                 onDelete = { deleting = it },
@@ -526,6 +560,7 @@ fun InventoryApp(store: InventoryStore) {
                         ScanMode.PickTarget -> when {
                             existing == null -> message = "That QR code isn't in your inventory yet. Pick a storage from the list instead."
                             !existing.canHoldChildren -> message = "That code belongs to the item “${existing.name}”. Scan a storage or container instead."
+                            store.isArchived(existing.id) -> message = "“${existing.name}” is in an archived bin. Unarchive it first."
                             else -> photoItemTarget = existing.id
                         }
                         is ScanMode.AssignQr ->
@@ -699,6 +734,7 @@ fun InventoryApp(store: InventoryStore) {
         } else {
             ItemDialog(
                 item = item,
+                archivedIn = if (store.isArchived(item.id)) store.path(item.id).first().name else null,
                 location = store.path(item.id).dropLast(1).joinToString(" › ") { it.name },
                 onPhoto = { takePhoto("N$SEP${item.id}") },
                 onViewPhoto = { i -> viewer = ViewerState(item.photoPaths, i, item.id) },
@@ -720,7 +756,7 @@ fun InventoryApp(store: InventoryStore) {
                 SheetAction(R.drawable.ic_clock, "Temporary bin", "No QR code yet, attach one later") { creatingTemp = true },
                 SheetAction(
                     R.drawable.ic_camera, "Add item to an existing bin", "Take a photo, then pick the bin",
-                    enabled = store.nodes.any { it.canHoldChildren },
+                    enabled = store.nodes.any { it.canHoldChildren && !store.isArchived(it.id) },
                 ) { photoItemTarget = null; takePhoto("P") },
             ),
             onDismiss = { showNewBin = false },
@@ -755,18 +791,9 @@ fun InventoryApp(store: InventoryStore) {
                     (if (node.archived) " · Archived" else "") + (if (where.isNotEmpty()) " · $where" else ""),
                 actions = listOfNotNull(
                     SheetAction(R.drawable.ic_info, "Info", "Date added, location, QR code") { infoFor = node.id },
-                    SheetAction(R.drawable.ic_camera, "Add photo") { takePhoto("N$SEP${node.id}") },
-                    if (!node.hasQr) SheetAction(R.drawable.ic_qr, "Assign QR code") { scanMode = ScanMode.AssignQr(node.id) } else null,
+                    if (!node.archived) SheetAction(R.drawable.ic_camera, "Add photo") { takePhoto("N$SEP${node.id}") } else null,
+                    if (!node.hasQr && !node.archived) SheetAction(R.drawable.ic_qr, "Assign QR code") { scanMode = ScanMode.AssignQr(node.id) } else null,
                     if (node.canHoldChildren) SheetAction(R.drawable.ic_table, "Export to Excel") { exportStorage(node) } else null,
-                    if (node.parentId == null) SheetAction(
-                        R.drawable.ic_archive,
-                        if (node.archived) "Move to active storage" else "Archive",
-                        if (node.archived) "Back in the main list" else "Put into long-term storage",
-                    ) {
-                        store.setArchived(node.id, !node.archived)
-                        message = if (node.archived) "“${node.name}” is back in Active storage."
-                        else "“${node.name}” moved to Archived storage. Open ☰ › Archived storage to find it."
-                    } else null,
                     SheetAction(R.drawable.ic_pencil, "Rename") { renaming = node },
                     SheetAction(R.drawable.ic_trash, "Delete", danger = true) { deleting = node },
                 ),
@@ -880,23 +907,42 @@ fun InventoryApp(store: InventoryStore) {
 private fun HomeScreen(
     store: InventoryStore,
     archivedView: Boolean,
+    selecting: Boolean,
+    selected: List<String>,
     onNewBin: () -> Unit,
     onFind: () -> Unit,
     onShowActive: () -> Unit,
     onShowArchived: () -> Unit,
     onSettings: () -> Unit,
+    onToggleSelect: (Node) -> Unit,
+    onStartSelect: () -> Unit,
+    onCancelSelect: () -> Unit,
+    onSelectAll: (List<String>) -> Unit,
+    onClearSelection: () -> Unit,
+    onArchiveSelected: (List<String>, Boolean) -> Unit,
     onOpen: (Node) -> Unit,
     onOptions: (Node) -> Unit,
     onDelete: (Node) -> Unit,
 ) {
     val storages = store.storages(archivedView)
+    val chosen = selected.filter { id -> storages.any { it.id == id } }
+    val selectMode = selecting && storages.isNotEmpty()
     Scaffold(
         containerColor = Bg,
         topBar = {
             TopAppBar(
+                navigationIcon = {
+                    if (selectMode) IconButton(onClick = onCancelSelect) {
+                        Icon(Icons.Filled.Close, contentDescription = "Cancel selection")
+                    }
+                },
                 title = {
                     Text(
-                        if (archivedView) "Archived storage" else "Storage Inventory",
+                        when {
+                            selectMode -> if (chosen.isEmpty()) "Select bins" else "${chosen.size} selected"
+                            archivedView -> "Archived storage"
+                            else -> "Storage Inventory"
+                        },
                         style = MaterialTheme.typography.headlineMedium,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
@@ -910,6 +956,15 @@ private fun HomeScreen(
                         archivedView = archivedView,
                         activeCount = store.storages(false).size,
                         archivedCount = store.storages(true).size,
+                        selecting = selectMode,
+                        selectedCount = chosen.size,
+                        allSelected = chosen.size == storages.size,
+                        canSelect = storages.isNotEmpty(),
+                        onArchiveSelected = { onArchiveSelected(chosen, !archivedView) },
+                        onStartSelect = onStartSelect,
+                        onSelectAll = { onSelectAll(storages.map { it.id }) },
+                        onClearSelection = onClearSelection,
+                        onCancelSelect = onCancelSelect,
                         onShowActive = onShowActive,
                         onShowArchived = onShowArchived,
                         onSettings = onSettings,
@@ -918,14 +973,14 @@ private fun HomeScreen(
                 },
             )
         },
-        floatingActionButton = { if (!archivedView) BrassButton("New Bin", onNewBin) },
+        floatingActionButton = { if (!archivedView && !selectMode) BrassButton("New Bin", onNewBin) },
         floatingActionButtonPosition = FabPosition.Center,
     ) { padding ->
         if (storages.isEmpty()) {
             when {
                 archivedView -> EmptyState(
                     title = "No archived bins",
-                    hint = "To archive a bin, swipe it left › More › Archive.",
+                    hint = "To archive bins: press and hold one in Active storage, select the bins, then ☰ › Archive.",
                     modifier = Modifier.padding(padding),
                 )
                 store.storages().isNotEmpty() -> EmptyState(
@@ -944,7 +999,7 @@ private fun HomeScreen(
                 contentPadding = PaddingValues(
                     start = 16.dp, end = 16.dp,
                     top = padding.calculateTopPadding() + 4.dp,
-                    bottom = padding.calculateBottomPadding() + if (archivedView) 32.dp else 110.dp,
+                    bottom = padding.calculateBottomPadding() + if (archivedView || selectMode) 32.dp else 110.dp,
                 ),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
@@ -958,12 +1013,23 @@ private fun HomeScreen(
                         node = storage,
                         detail = countText(items, containers),
                         tag = if (storage.isTemporary) "Temporary" else null,
-                        onClick = { onOpen(storage) },
+                        selectState = if (selectMode) storage.id in chosen else null,
+                        onClick = { if (selectMode || archivedView) onToggleSelect(storage) else onOpen(storage) },
+                        onLongClick = { onToggleSelect(storage) },
                         onMore = { onOptions(storage) },
                         onDelete = { onDelete(storage) },
                     )
                 }
-                item { SwipeHint() }
+                item {
+                    SwipeHint(
+                        when {
+                            selectMode && archivedView -> "Tap bins to select them, then ☰ › Unarchive"
+                            selectMode -> "Tap bins to select them, then ☰ › Archive"
+                            archivedView -> "Archived bins can’t be opened. Tap to select, then ☰ › Unarchive"
+                            else -> "Swipe left for options · press and hold to select"
+                        }
+                    )
+                }
             }
         }
     }
@@ -1453,15 +1519,24 @@ private fun NodeRow(
     node: Node,
     detail: String,
     tag: String? = null,
+    selectState: Boolean? = null,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     onMore: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    SwipeRow(onClick = onClick, onMore = onMore, onDelete = onDelete) {
+    SwipeRow(
+        onClick = onClick,
+        onLongClick = onLongClick,
+        swipeEnabled = selectState == null,
+        selected = selectState == true,
+        onMore = onMore,
+        onDelete = onDelete,
+    ) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .background(Surface1)
+                .background(if (selectState == true) Surface2 else Surface1)
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1483,15 +1558,55 @@ private fun NodeRow(
                     Text(detail, style = MaterialTheme.typography.bodyMedium, color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            Icon(painterResource(R.drawable.ic_chevron), contentDescription = null, tint = TextFaint, modifier = Modifier.size(18.dp))
+            if (selectState != null) CheckCircle(selectState)
+            else Icon(painterResource(R.drawable.ic_chevron), contentDescription = null, tint = TextFaint, modifier = Modifier.size(18.dp))
         }
     }
 }
 
+@Composable
+private fun CheckCircle(on: Boolean) {
+    Box(
+        Modifier
+            .size(24.dp)
+            .clip(CircleShape)
+            .background(if (on) Brass else Color.Transparent)
+            .border(1.6.dp, if (on) Brass else TextFaint, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (on) Icon(painterResource(R.drawable.ic_check), contentDescription = "Selected", tint = BrassInk, modifier = Modifier.size(15.dp))
+    }
+}
+
+@Composable
+private fun ArchivedNote(text: String) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(bottom = 10.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Brass.copy(alpha = 0.10f))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(painterResource(R.drawable.ic_archive), contentDescription = null, tint = BrassHi, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(10.dp))
+        Text(
+            "$text To open it: ☰ › Archived storage, select it, ☰ › Unarchive.",
+            color = BrassHi,
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
 /** Row that slides left to reveal More and Delete. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SwipeRow(
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+    swipeEnabled: Boolean = true,
+    selected: Boolean = false,
     onMore: () -> Unit,
     onDelete: () -> Unit,
     content: @Composable () -> Unit,
@@ -1500,11 +1615,14 @@ private fun SwipeRow(
     val offset = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
     fun close() { scope.launch { offset.animateTo(0f) } }
+    LaunchedEffect(swipeEnabled) { if (!swipeEnabled) offset.snapTo(0f) }
+    val haptics = LocalHapticFeedback.current
     Box(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
             .background(Surface3)
+            .then(if (selected) Modifier.border(1.5.dp, Brass.copy(alpha = 0.55f), RoundedCornerShape(18.dp)) else Modifier)
     ) {
         Row(Modifier.matchParentSize(), horizontalArrangement = Arrangement.End) {
             SwipeAction(R.drawable.ic_dots, "More", Surface3, TextHi) { close(); onMore() }
@@ -1514,6 +1632,7 @@ private fun SwipeRow(
             Modifier
                 .offset { IntOffset(offset.value.roundToInt(), 0) }
                 .draggable(
+                    enabled = swipeEnabled,
                     orientation = Orientation.Horizontal,
                     state = rememberDraggableState { delta ->
                         scope.launch { offset.snapTo((offset.value + delta).coerceIn(-reveal - 60f, 0f)) }
@@ -1522,7 +1641,16 @@ private fun SwipeRow(
                         offset.animateTo(if (offset.value < -reveal / 2 || velocity < -1500f) -reveal else 0f)
                     },
                 )
-                .clickable { if (offset.value != 0f) close() else onClick() }
+                .combinedClickable(
+                    onClick = { if (offset.value != 0f) close() else onClick() },
+                    onLongClick = onLongClick?.let { lc ->
+                        {
+                            if (offset.value != 0f) close()
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            lc()
+                        }
+                    },
+                )
         ) { content() }
     }
 }
@@ -1599,9 +1727,9 @@ private fun SectionLabel(text: String) {
 }
 
 @Composable
-private fun SwipeHint() {
+private fun SwipeHint(text: String = "Swipe left on a row for options") {
     Text(
-        "Swipe left on a row for options",
+        text,
         style = MaterialTheme.typography.bodySmall,
         color = TextFaint,
         textAlign = TextAlign.Center,
@@ -1635,6 +1763,15 @@ private fun MainMenu(
     archivedView: Boolean,
     activeCount: Int,
     archivedCount: Int,
+    selecting: Boolean,
+    selectedCount: Int,
+    allSelected: Boolean,
+    canSelect: Boolean,
+    onArchiveSelected: () -> Unit,
+    onStartSelect: () -> Unit,
+    onSelectAll: () -> Unit,
+    onClearSelection: () -> Unit,
+    onCancelSelect: () -> Unit,
     onShowActive: () -> Unit,
     onShowArchived: () -> Unit,
     onSettings: () -> Unit,
@@ -1648,6 +1785,21 @@ private fun MainMenu(
             containerColor = Surface2,
             shape = RoundedCornerShape(16.dp),
         ) {
+            if (selecting) {
+                val bins = if (selectedCount == 1) "1 bin" else "$selectedCount bins"
+                MainMenuItem(
+                    if (archivedView) R.drawable.ic_unarchive else R.drawable.ic_archive,
+                    if (archivedView) (if (selectedCount > 0) "Unarchive $bins" else "Unarchive")
+                    else (if (selectedCount > 0) "Archive $bins" else "Archive"),
+                    null, current = null, enabled = selectedCount > 0,
+                ) { open = false; onArchiveSelected() }
+                if (allSelected) MainMenuItem(R.drawable.ic_select, "Clear selection", null, current = null) { open = false; onClearSelection() }
+                else MainMenuItem(R.drawable.ic_select, "Select all", null, current = null) { open = false; onSelectAll() }
+                MainMenuItem(R.drawable.ic_close, "Cancel selection", null, current = null) { open = false; onCancelSelect() }
+            } else {
+                MainMenuItem(R.drawable.ic_select, "Select bins", null, current = null, enabled = canSelect) { open = false; onStartSelect() }
+            }
+            HorizontalDivider(color = Color(0x14FFFFFF), modifier = Modifier.padding(vertical = 4.dp))
             MainMenuItem(R.drawable.ic_box, "Active storage", activeCount, current = !archivedView) { open = false; onShowActive() }
             MainMenuItem(R.drawable.ic_archive, "Archived storage", archivedCount, current = archivedView) { open = false; onShowArchived() }
             HorizontalDivider(color = Color(0x14FFFFFF), modifier = Modifier.padding(vertical = 4.dp))
@@ -1657,20 +1809,24 @@ private fun MainMenu(
 }
 
 @Composable
-private fun MainMenuItem(icon: Int, label: String, count: Int?, current: Boolean, onClick: () -> Unit) {
+private fun MainMenuItem(icon: Int, label: String, count: Int?, current: Boolean?, enabled: Boolean = true, onClick: () -> Unit) {
     DropdownMenuItem(
+        enabled = enabled,
+        modifier = Modifier.alpha(if (enabled) 1f else 0.4f),
         leadingIcon = { Icon(painterResource(icon), contentDescription = null, tint = TextMuted, modifier = Modifier.size(20.dp)) },
         text = {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.widthIn(min = 170.dp)) {
                 Text(label, color = TextHi, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
                 if (count != null) Text("$count", color = TextFaint, style = MaterialTheme.typography.bodyMedium)
-                Spacer(Modifier.width(10.dp))
-                Box(
-                    Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(if (current) Green else Color.Transparent)
-                )
+                if (current != null) {
+                    Spacer(Modifier.width(10.dp))
+                    Box(
+                        Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(if (current) Green else Color.Transparent)
+                    )
+                }
             }
         },
         onClick = onClick,
@@ -1995,6 +2151,7 @@ private fun AddChildDialog(
 @Composable
 private fun ItemDialog(
     item: Node,
+    archivedIn: String?,
     location: String,
     onPhoto: () -> Unit,
     onViewPhoto: (Int) -> Unit,
@@ -2008,6 +2165,7 @@ private fun ItemDialog(
         title = { Text(item.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (archivedIn != null) ArchivedNote("In archived bin “$archivedIn”.")
                 val photos = item.photoPaths
                 if (photos.isNotEmpty()) {
                     if (photos.size == 1) {
@@ -2042,7 +2200,7 @@ private fun ItemDialog(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.weight(1f),
                         )
-                        TextButton(onClick = onPhoto) { Text("Add photo") }
+                        if (archivedIn == null) TextButton(onClick = onPhoto) { Text("Add photo") }
                     }
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2052,7 +2210,7 @@ private fun ItemDialog(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.weight(1f),
                         )
-                        TextButton(onClick = onPhoto) { Text("Take photo") }
+                        if (archivedIn == null) TextButton(onClick = onPhoto) { Text("Take photo") }
                     }
                 }
                 Spacer(Modifier.height(4.dp))
@@ -2079,6 +2237,10 @@ private fun InfoDialog(store: InventoryStore, node: Node, onDismiss: () -> Unit)
         title = { Text("Info", fontWeight = FontWeight.SemiBold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (store.isArchived(node.id)) {
+                    val root = store.path(node.id).first()
+                    ArchivedNote(if (root.id == node.id) "This bin is archived." else "In archived bin “${root.name}”.")
+                }
                 InfoRow("Name", node.name)
                 InfoRow("Type", if (node.isTemporary) "Temporary storage" else typeLabel(node.type))
                 InfoRow(
@@ -2206,7 +2368,7 @@ private fun ChooseTargetDialog(
     onDismiss: () -> Unit,
 ) {
     val targets = store.nodes
-        .filter { it.canHoldChildren }
+        .filter { it.canHoldChildren && !store.isArchived(it.id) }
         .map { node -> node to store.path(node.id).joinToString(" › ") { it.name } }
         .sortedBy { it.second.lowercase() }
     AlertDialog(

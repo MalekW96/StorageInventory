@@ -3,6 +3,7 @@
 'use strict';
 
 const APP_VERSION = '2.1.1.0';
+const APP_BUILD = 2; // bumped for updates published under the same version number
 
 // ===========================================================================
 // Small helpers
@@ -45,6 +46,9 @@ const ICON = {
   menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
   archive: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M3 4.5h18v4H3zM4.5 8.5v11h15v-11M10 12.5h4"/></svg>',
   sliders: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 7h7M15 7h5M4 17h3M11 17h9"/><circle cx="13" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 12.5 4 4 8-9"/></svg>',
+  unarchive: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M3 4.5h18v4H3zM4.5 8.5v11h15v-11M12 17v-5.5M9.5 14l2.5-2.5 2.5 2.5"/></svg>',
+  selectIcon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12.3 2.7 2.7L16 9.5"/></svg>',
   clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
 };
 
@@ -488,6 +492,7 @@ function dialog({ title, body = '', actions = [], onOpen, dismissable = true, on
     </div>`;
   const box = $('.actions', scrim);
   for (const a of actions) {
+    if (!a) continue;
     const b = document.createElement('button');
     b.className = 'btn text' + (a.kind === 'danger' ? ' danger' : '');
     b.textContent = a.label;
@@ -700,13 +705,33 @@ function textDialog({ title, label, initial = '', confirm = 'Save' }) {
 const state = {
   screen: 'home',        // home | detail | search | settings
   archived: false,       // home shows archived bins instead of active ones
+  selecting: false,      // bin selection mode on the home screen
+  selected: new Set(),   // ids of selected bins
   stack: [],             // ids of opened storages/containers
   search: { query: '', photoBlob: null, photoUrl: null, results: null, progress: null, error: null, note: null },
   update: null,          // { version, notes } when a newer version is published
 };
 
-function go(screen) { state.screen = screen; render(); window.scrollTo(0, 0); }
+function go(screen) { if (screen !== 'home') endSelect(false); state.screen = screen; render(); window.scrollTo(0, 0); }
+function endSelect(rerender = true) { state.selecting = false; state.selected.clear(); if (rerender) render(); }
+function toggleSelect(id) {
+  state.selecting = true;
+  if (state.selected.has(id)) state.selected.delete(id); else state.selected.add(id);
+  render();
+}
+/** Archived bins can't be opened; their contents can still be looked at from search. */
+function showArchivedNode(node) {
+  const root = Store.path(node.id)[0];
+  if (canHold(node)) infoDialog(node); else itemDialog(node);
+  Log.add('Viewed archived entry', `“${node.name}” in “${root.name}”`);
+}
+function archivedNote(node) {
+  if (!Store.isArchived(node.id)) return '';
+  const root = Store.path(node.id)[0];
+  return `<p class="archived-note">${ICON.archive}<span>${root.id === node.id ? 'This bin is archived' : `In archived bin “${esc(root.name)}”`}. To open it: ☰ › Archived storage, select it, ☰ › Unarchive.</span></p>`;
+}
 function openNode(node) {
+  if (Store.isArchived(node.id)) return showArchivedNode(node);
   const target = canHold(node) ? node : (node.parentId ? Store.get(node.parentId) : null);
   state.stack = target ? Store.path(target.id).map((n) => n.id) : [];
   state.screen = state.stack.length ? 'detail' : 'home';
@@ -750,17 +775,18 @@ function nextBinName() {
   return `Bin ${String(max + 1).padStart(3, '0')}`;
 }
 
-function nodeRow(node, detail, { score, tag } = {}) {
+function nodeRow(node, detail, { score, tag, select } = {}) {
   const thumb = mainPhoto(node)
     ? `<img class="thumb" data-photo="${esc(mainPhoto(node))}" alt="">`
     : badge(node);
   const row = `<div class="row clickable" data-open="${esc(node.id)}">
     ${thumb}
     <div class="main"><div class="name">${esc(node.name)}</div><div class="detail">${tag ? `<span class="tag">${esc(tag)}</span>` : ''}${esc(detail)}</div></div>
-    ${score != null ? `<span class="score">${Math.round(score * 100)}%</span>` : `<span class="chev">${ICON.chev}</span>`}
+    ${score != null ? `<span class="score">${Math.round(score * 100)}%</span>`
+      : select ? `<span class="check${select === 'on' ? ' on' : ''}">${ICON.check}</span>` : `<span class="chev">${ICON.chev}</span>`}
   </div>`;
   if (score != null) return `<div class="card">${row}</div>`;
-  return `<div class="swipe" data-swipe="${esc(node.id)}">
+  return `<div class="swipe${select === 'on' ? ' selected' : ''}" data-swipe="${esc(node.id)}">
     <div class="swipe-actions">
       <button class="sa-more" data-sa-more="${esc(node.id)}">${ICON.dots}More</button>
       <button class="sa-del" data-sa-del="${esc(node.id)}">${ICON.trash}Delete</button>
@@ -811,6 +837,9 @@ function installBanner() {
 function renderHome() {
   const arch = state.archived;
   const storages = Store.storages(arch);
+  for (const id of [...state.selected]) if (!storages.some((s) => s.id === id)) state.selected.delete(id);
+  if (state.selecting && !storages.length) state.selecting = false;
+  const sel = state.selecting;
   const actions = `
     ${Store.nodes.length ? `<button class="icon-btn round" data-act="search" aria-label="Search">${ICON.search}</button>` : ''}
     <button class="icon-btn round" data-act="main-menu" aria-label="Menu">${ICON.menu}</button>`;
@@ -823,12 +852,21 @@ function renderHome() {
         : [ICON.box, 'No Storage Data Available', 'Tap “New Bin” to add your first one.'];
     body = `<div class="empty"><div class="empty-icon">${icon}</div><h2>${h}</h2><p>${esc(p)}</p></div>`;
   } else {
+    const hint = sel ? (arch ? 'Tap bins to select them, then ☰ › Unarchive' : 'Tap bins to select them, then ☰ › Archive')
+      : arch ? 'Archived bins can’t be opened. Tap to select, then ☰ › Unarchive'
+      : 'Swipe left for options · press and hold to select';
     body = `<div class="label">${arch ? 'Archived · ' : ''}${plural(storages.length, 'bin')}</div><div class="list">${storages.map((s) =>
-      nodeRow(s, countText(Store.countInside(s.id)), { tag: s.qr ? null : 'Temporary' })).join('')}</div>${SWIPE_HINT}`;
+      nodeRow(s, countText(Store.countInside(s.id)), { tag: s.qr ? null : 'Temporary', select: sel ? (state.selected.has(s.id) ? 'on' : 'off') : null })).join('')}</div>` +
+      `<p class="swipe-hint">${esc(hint)}</p>`;
   }
-  return topbar({ title: arch ? 'Archived storage' : 'Storage Inventory', actions, home: true }) + updateBanner() + installBanner() +
-    `<main class="content${arch ? ' no-fab' : ''}">${body}</main>` +
-    (arch ? '' : `<button class="fab" data-act="add-menu">${ICON.plus}New Bin</button>`);
+  const title = sel ? (state.selected.size ? `${state.selected.size} selected` : 'Select bins') : arch ? 'Archived storage' : 'Storage Inventory';
+  const bar = sel
+    ? `<header class="topbar home"><button class="icon-btn" data-act="cancel-select" aria-label="Cancel selection">${ICON.close}</button>
+        <div class="titles"><h1>${esc(title)}</h1></div>${actions}</header>`
+    : topbar({ title, actions, home: true });
+  return bar + updateBanner() + installBanner() +
+    `<main class="content${arch || sel ? ' no-fab' : ''}">${body}</main>` +
+    (arch || sel ? '' : `<button class="fab" data-act="add-menu">${ICON.plus}New Bin</button>`);
 }
 
 function renderDetail() {
@@ -972,10 +1010,10 @@ function itemDialog(item) {
     : `<p class="small-muted">No photo yet</p>`;
   const close = dialog({
     title: item.name,
-    body: `${photo}<p style="margin-top:10px">Stored in: ${esc(Store.location(item.id) || 'Top level')}</p>`,
+    body: `${archivedNote(item)}${photo}<p style="margin-top:10px">Stored in: ${esc(Store.location(item.id) || 'Top level')}</p>`,
     actions: [
       { label: 'Info', onClick: () => { close(); infoDialog(item); } },
-      { label: 'Add photo', onClick: () => { close(); flowAddPhoto(item); } },
+      Store.isArchived(item.id) ? null : { label: 'Add photo', onClick: () => { close(); flowAddPhoto(item); } },
       { label: 'Rename', onClick: () => { close(); flowRename(item); } },
       { label: 'Delete', kind: 'danger', onClick: () => { close(); flowDelete(item); } },
       { label: 'Close', onClick: () => close() },
@@ -991,7 +1029,7 @@ function infoDialog(node) {
   const row = (k, v) => `<div class="info-row"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`;
   const close = dialog({
     title: 'Info',
-    body: row('Name', node.name) + row('Type', typeLabel(node)) + row('Added', fmtDate(node.createdAt)) +
+    body: archivedNote(node) + row('Name', node.name) + row('Type', typeLabel(node)) + row('Added', fmtDate(node.createdAt)) +
       row('Stored in', Store.location(node.id) || 'Top level') + row('Photos', String(photoCount(node))) +
       (canHold(node) ? row('Contains', countText(Store.countInside(node.id))) : '') +
       row('QR code', node.qr || 'None yet (swipe left › More › Assign QR code)'),
@@ -1026,15 +1064,9 @@ function nodeMenu(anchor, node) {
     subtitle: `${typeLabel(node)}${node.archived ? ' · Archived' : ''}${Store.location(node.id) ? ' · ' + Store.location(node.id) : ''}`,
     items: [
       { icon: ICON.info, label: 'Info', note: 'Date added, location, QR code', onClick: () => infoDialog(node) },
-      { icon: ICON.camera, label: 'Add photo', onClick: () => flowAddPhoto(node) },
-      !node.qr ? { icon: ICON.qr, label: 'Assign QR code', onClick: () => flowAssignQr(node) } : null,
+      node.archived ? null : { icon: ICON.camera, label: 'Add photo', onClick: () => flowAddPhoto(node) },
+      !node.qr && !node.archived ? { icon: ICON.qr, label: 'Assign QR code', onClick: () => flowAssignQr(node) } : null,
       canHold(node) ? { icon: ICON.sheet, label: 'Export to Excel', onClick: () => exportStorageExcel(node) } : null,
-      !node.parentId ? {
-        icon: ICON.archive,
-        label: node.archived ? 'Move to active storage' : 'Archive',
-        note: node.archived ? 'Back in the main list' : 'Put into long-term storage',
-        onClick: () => flowToggleArchive(node),
-      } : null,
       { icon: ICON.pencil, label: 'Rename', onClick: () => flowRename(node) },
       { icon: ICON.trash, label: 'Delete', danger: true, onClick: () => flowDelete(node) },
     ],
@@ -1071,12 +1103,14 @@ async function flowNewStorage() {
   openNode(storage);
 }
 
-async function flowToggleArchive(node) {
-  const toArchive = !node.archived;
-  await Store.update(node.id, { archived: toArchive });
+async function flowArchiveSelected(toArchive) {
+  const ids = [...state.selected];
+  if (!ids.length) return;
+  for (const id of ids) await Store.update(id, { archived: toArchive });
+  endSelect(false);
   render();
-  toast(toArchive ? `“${node.name}” moved to Archived storage. Open ☰ › Archived storage to find it.`
-    : `“${node.name}” is back in Active storage.`);
+  const what = ids.length === 1 ? `“${Store.get(ids[0]).name}”` : `${ids.length} bins`;
+  toast(toArchive ? `${what} moved to Archived storage (☰ › Archived storage).` : `${what} back in Active storage.`);
 }
 
 async function flowTemporaryStorage() {
@@ -1120,7 +1154,7 @@ async function flowAddChildByQr(parentId) {
 
 function chooseTarget(photoId) {
   return new Promise((resolve) => {
-    const targets = Store.nodes.filter(canHold)
+    const targets = Store.nodes.filter((n) => canHold(n) && !Store.isArchived(n.id))
       .map((n) => ({ n, label: Store.path(n.id).map((p) => p.name).join(' › ') }))
       .sort((a, b) => a.label.localeCompare(b.label));
     const close = dialog({
@@ -1136,6 +1170,7 @@ function chooseTarget(photoId) {
           const node = Store.findByQr(qr);
           if (!node) { await alertDialog("That QR code isn't in your inventory yet. Pick a storage from the list instead."); return resolve(await chooseTarget(photoId)); }
           if (!canHold(node)) { await alertDialog(`That code belongs to the item “${node.name}”. Scan a storage or container instead.`); return resolve(await chooseTarget(photoId)); }
+          if (Store.isArchived(node.id)) { await alertDialog(`“${node.name}” is in an archived bin. Unarchive it first.`); return resolve(await chooseTarget(photoId)); }
           resolve(node);
         } },
         { label: 'Cancel', onClick: () => { close(); resolve(null); } },
@@ -1438,7 +1473,7 @@ async function checkForUpdates(silent = false) {
   try {
     const info = await fetchLatest();
     Log.add(silent ? 'Automatic update check' : 'Checking for updates', `Installed ${APP_VERSION} · latest ${info.version}`);
-    if (newer(info.version, APP_VERSION)) {
+    if (newer(info.version, APP_VERSION) || (info.version === APP_VERSION && (info.build || 1) > APP_BUILD)) {
       state.update = info;
       state.updateCheck = { status: 'available', version: info.version, notes: info.notes };
     } else if (!silent) {
@@ -1695,6 +1730,7 @@ document.addEventListener('click', (e) => {
       clearSearchPhoto();
       return openNode(node);
     }
+    if (state.screen === 'home' && (state.selecting || state.archived)) return toggleSelect(node.id);
     if (canHold(node)) { state.stack.push(node.id); go('detail'); } else itemDialog(node);
     return;
   }
@@ -1704,12 +1740,24 @@ document.addEventListener('click', (e) => {
   if (a === 'back') back();
   else if (a === 'search') go('search');
   else if (a === 'settings') { state.updateCheck = null; go('settings'); }
+  else if (a === 'cancel-select') endSelect();
   else if (a === 'main-menu') {
+    const arch = state.archived, n = state.selected.size, sel = state.selecting;
+    const binsHere = Store.storages(arch);
     showMenu(act, [
+      sel ? { icon: arch ? ICON.unarchive : ICON.archive,
+        label: arch ? (n ? `Unarchive ${plural(n, 'bin')}` : 'Unarchive') : (n ? `Archive ${plural(n, 'bin')}` : 'Archive'),
+        disabled: !n, onClick: () => flowArchiveSelected(!arch) } : null,
+      sel ? (n < binsHere.length
+        ? { label: 'Select all', icon: ICON.selectIcon, onClick: () => { binsHere.forEach((b) => state.selected.add(b.id)); render(); } }
+        : { label: 'Clear selection', icon: ICON.selectIcon, onClick: () => { state.selected.clear(); render(); } }) : null,
+      sel ? { label: 'Cancel selection', icon: ICON.close, onClick: () => endSelect() }
+        : { label: 'Select bins', icon: ICON.selectIcon, disabled: !binsHere.length, onClick: () => { state.selecting = true; render(); } },
+      '-',
       { icon: ICON.box, label: 'Active storage', count: Store.storages(false).length, current: !state.archived,
-        onClick: () => { state.archived = false; go('home'); } },
+        onClick: () => { endSelect(false); state.archived = false; go('home'); } },
       { icon: ICON.archive, label: 'Archived storage', count: Store.storages(true).length, current: state.archived,
-        onClick: () => { state.archived = true; go('home'); } },
+        onClick: () => { endSelect(false); state.archived = true; go('home'); } },
       '-',
       { icon: ICON.sliders, label: 'Settings', current: false, onClick: () => { state.updateCheck = null; go('settings'); } },
     ]);
@@ -1720,7 +1768,7 @@ document.addEventListener('click', (e) => {
       items: [
         { icon: ICON.qr, label: 'Scan bin QR code', note: 'Then photograph the bin and name it', onClick: () => flowNewStorage() },
         { icon: ICON.clock, label: 'Temporary bin', note: 'No QR code yet, attach one later', onClick: () => flowTemporaryStorage() },
-        { icon: ICON.camera, label: 'Add item to an existing bin', note: 'Take a photo, then pick the bin', disabled: !Store.nodes.some(canHold), onClick: () => flowAddByPhoto() },
+        { icon: ICON.camera, label: 'Add item to an existing bin', note: 'Take a photo, then pick the bin', disabled: !Store.nodes.some((n) => canHold(n) && !Store.isArchived(n.id)), onClick: () => flowAddByPhoto() },
       ],
     });
   } else if (a === 'detail-add') {
@@ -1779,10 +1827,24 @@ function closeSwipe() {
   if (Swipe.open) { const row = $('.row', Swipe.open); if (row) row.style.transform = ''; Swipe.open = null; }
 }
 (function initSwipe() {
-  let el = null, row = null, x0 = 0, y0 = 0, dx = 0, mode = null, base = 0;
+  let el = null, row = null, x0 = 0, y0 = 0, dx = 0, mode = null, base = 0, pressTimer = 0;
+  document.addEventListener('contextmenu', (e) => { if (e.target.closest('[data-swipe]')) e.preventDefault(); });
   document.addEventListener('pointerdown', (e) => {
     const s = e.target.closest('[data-swipe]');
     if (!s || e.target.closest('.swipe-actions')) return;
+    if (state.screen === 'home' && !state.selecting) {
+      clearTimeout(pressTimer);
+      const id = s.dataset.swipe;
+      pressTimer = setTimeout(() => {
+        if (mode || !el) return;
+        mode = 'press'; Swipe.justDragged = true;
+        closeSwipe();
+        if (navigator.vibrate) navigator.vibrate(15);
+        Log.add('Started selecting', 'press and hold');
+        toggleSelect(id);
+      }, 500);
+    }
+    if (state.selecting) return;
     if (Swipe.open && Swipe.open !== s) closeSwipe();
     el = s; row = $('.row', s); x0 = e.clientX; y0 = e.clientY; dx = 0; mode = null;
     base = Swipe.open === s ? -SWIPE_W : 0;
@@ -1793,14 +1855,23 @@ function closeSwipe() {
     if (!mode) {
       if (Math.abs(mx) > 8 && Math.abs(mx) > Math.abs(my)) mode = 'h';
       else if (Math.abs(my) > 8) { mode = 'v'; }
+      if (mode) clearTimeout(pressTimer);
     }
     if (mode !== 'h') return;
+    if (!row || !row.isConnected) return;
     dx = Math.min(0, Math.max(-SWIPE_W - 30, base + mx));
     row.classList.add('dragging');
     row.style.transform = `translateX(${dx}px)`;
   }, { passive: true });
   const end = () => {
+    clearTimeout(pressTimer);
     if (!el) return;
+    if (mode === 'press') {
+      // swallow only the click that ends the press-and-hold
+      setTimeout(() => { Swipe.justDragged = false; }, 80);
+      el = null; row = null; mode = null;
+      return;
+    }
     if (mode === 'h') {
       row.classList.remove('dragging');
       if (dx < -SWIPE_W / 2) { row.style.transform = `translateX(${-SWIPE_W}px)`; Swipe.open = el; }

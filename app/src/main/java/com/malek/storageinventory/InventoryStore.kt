@@ -55,7 +55,10 @@ class InventoryStore(context: Context) {
     /** Top-level bins in one view: active or archived. */
     fun storages(archived: Boolean): List<Node> = storages().filter { it.archived == archived }
 
-    /** Moves a bin into (or back out of) the archive. */
+    /** True when the entry is (inside) an archived bin. */
+    fun isArchived(id: String): Boolean = path(id).firstOrNull()?.archived == true
+
+        /** Moves a bin into (or back out of) the archive. */
     fun setArchived(id: String, archived: Boolean) {
         val index = nodes.indexOfFirst { it.id == id }
         if (index >= 0) {

@@ -1,6 +1,6 @@
 {
-  "versionCode": 9,
+  "versionCode": 10,
   "versionName": "2.1.1.0",
   "apkUrl": "https://github.com/MalekW96/StorageInventory/releases/download/v2.1.1.0/StorageInventory.apk",
-  "notes": "Archive mode: swipe a bin left › More › Archive to put it into long-term storage. The ☰ menu (top right, replaces the gear) switches between Active storage and Archived storage and opens Settings; a green dot shows where you are. “New Bin” now has a capital B."
+  "notes": "Select bins: press and hold a bin (or ☰ › Select bins), tap more to tick them, then ☰ › Archive. In Archived storage, tap bins to select them, then ☰ › Unarchive. Archived bins can’t be opened, but search (by words, photo or QR code) still finds what’s inside them. “New Bin” now has a capital B."
 }
