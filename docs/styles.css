@@ -192,12 +192,34 @@ button { cursor: pointer; }
 .progress > div { height: 100%; background: var(--primary); width: 30%; animation: slide 1.1s infinite ease-in-out; }
 .progress.det > div { animation: none; transition: width 0.2s; }
 
-.viewer { position: fixed; inset: 0; background: #000; z-index: 80; display: flex; align-items: center; justify-content: center; }
-.viewer img { max-width: 100%; max-height: 100%; object-fit: contain; }
-.viewer p { position: absolute; bottom: calc(env(safe-area-inset-bottom) + 24px); color: rgba(255, 255, 255, 0.7); margin: 0; font-size: 14px; }
+.viewer { position: fixed; inset: 0; background: #000; z-index: 45; }
+.viewer .pages {
+  position: absolute; inset: 0; display: flex; overflow-x: auto; overflow-y: hidden;
+  scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; scrollbar-width: none;
+}
+.viewer .pages::-webkit-scrollbar { display: none; }
+.viewer .page { flex: 0 0 100%; height: 100%; scroll-snap-align: center; display: flex; align-items: center; justify-content: center; }
+.viewer .page img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.viewer-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 8px;
+  padding: 12px 12px calc(env(safe-area-inset-bottom) + 16px); background: linear-gradient(transparent, rgba(0, 0, 0, 0.6));
+}
+.viewer-count { flex: 1; text-align: center; color: rgba(255, 255, 255, 0.85); font-size: 14px; }
+.viewer-bar .danger { color: #FFB4AB; }
+
+/* Photo strips (several photos of one entry) */
+.strip { display: flex; gap: 8px; overflow-x: auto; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; padding-bottom: 4px; }
+.strip-item { position: relative; flex: none; scroll-snap-align: start; }
+.strip-item img { width: 104px; height: 104px; border-radius: 12px; object-fit: cover; display: block; background: var(--line); }
+.strip.big .strip-item img { width: 260px; height: 200px; border-radius: var(--radius); }
+.strip-x {
+  position: absolute; top: 4px; right: 4px; width: 28px; height: 28px; border-radius: 50%; border: 0;
+  background: rgba(0, 0, 0, 0.55); color: #fff; display: flex; align-items: center; justify-content: center; padding: 0;
+}
+.strip-x svg { width: 16px; height: 16px; }
 
 /* ---------- Camera ---------- */
-.camera { position: fixed; inset: 0; background: #000; z-index: 40; }
+.camera { position: fixed; inset: 0; background: #000; z-index: 85; }
 .camera video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .camera-finder { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .camera-top {

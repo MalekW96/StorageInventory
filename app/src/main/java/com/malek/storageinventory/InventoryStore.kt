@@ -21,8 +21,12 @@ data class Node(
     val type: NodeType,
     val parentId: String?,
     val createdAt: Long,
-    val photoPath: String? = null,
+    /** All photos of this entry, first one is the main photo. */
+    val photoPaths: List<String> = emptyList(),
 ) {
+    /** The main (first) photo. */
+    val photoPath: String? get() = photoPaths.firstOrNull()
+
     val canHoldChildren: Boolean get() = type != NodeType.ITEM
 
     /** Entries made without a QR code (photo-only items, temporary storages). */
@@ -97,7 +101,7 @@ class InventoryStore(context: Context) {
         return items to containers
     }
 
-    fun add(qr: String, name: String, type: NodeType, parentId: String?, photoPath: String? = null): Node {
+    fun add(qr: String, name: String, type: NodeType, parentId: String?, photoPaths: List<String> = emptyList()): Node {
         val node = Node(
             id = UUID.randomUUID().toString(),
             qr = qr,
@@ -105,7 +109,7 @@ class InventoryStore(context: Context) {
             type = type,
             parentId = parentId,
             createdAt = System.currentTimeMillis(),
-            photoPath = photoPath,
+            photoPaths = photoPaths,
         )
         nodes.add(node)
         save()
@@ -113,7 +117,7 @@ class InventoryStore(context: Context) {
             "Added ${typeWord(type)}",
             "“${node.name}”" + (if (qr.isNotBlank()) " · QR $qr" else " · no QR") +
                 (parentId?.let { " · in ${path(it).joinToString(" › ") { p -> p.name }}" } ?: "") +
-                (if (photoPath != null) " · with photo" else " · no photo")
+                (if (photoPaths.isEmpty()) " · no photo" else " · ${photoPaths.size} photo(s)")
         )
         return node
     }
@@ -128,15 +132,26 @@ class InventoryStore(context: Context) {
         }
     }
 
-    /** Replaces a node's photo (deleting the old photo file). */
-    fun setPhoto(id: String, photoPath: String) {
+    /** Adds another photo to an entry. */
+    fun addPhoto(id: String, photoPath: String) {
         val index = nodes.indexOfFirst { it.id == id }
         if (index >= 0) {
-            val old = nodes[index].photoPath
-            nodes[index] = nodes[index].copy(photoPath = photoPath)
+            val n = nodes[index]
+            nodes[index] = n.copy(photoPaths = n.photoPaths + photoPath)
             save()
-            if (old != null && old != photoPath) File(old).delete()
-            ActivityLog.log(if (old == null) "Photo added" else "Photo replaced", "“${nodes[index].name}”")
+            ActivityLog.log("Photo added", "“${n.name}” · now ${n.photoPaths.size + 1} photo(s)")
+        }
+    }
+
+    /** Removes one photo from an entry and deletes the file. */
+    fun removePhoto(id: String, photoPath: String) {
+        val index = nodes.indexOfFirst { it.id == id }
+        if (index >= 0) {
+            val n = nodes[index]
+            nodes[index] = n.copy(photoPaths = n.photoPaths - photoPath)
+            save()
+            File(photoPath).delete()
+            ActivityLog.log("Photo deleted", "“${n.name}” · ${n.photoPaths.size - 1} photo(s) left")
         }
     }
 
@@ -155,7 +170,7 @@ class InventoryStore(context: Context) {
                 nodes.filter { it.parentId == current }.forEach { queue.add(it.id) }
             }
         }
-        val photos = nodes.filter { it.id in toRemove }.mapNotNull { it.photoPath }
+        val photos = nodes.filter { it.id in toRemove }.flatMap { it.photoPaths }
         nodes.removeAll { it.id in toRemove }
         save()
         photos.forEach { File(it).delete() }
@@ -182,7 +197,12 @@ class InventoryStore(context: Context) {
                         type = NodeType.valueOf(o.getString("type")),
                         parentId = if (o.isNull("parentId")) null else o.getString("parentId"),
                         createdAt = o.optLong("createdAt", 0L),
-                        photoPath = if (o.isNull("photoPath")) null else o.optString("photoPath").ifBlank { null },
+                        photoPaths = o.optJSONArray("photos")?.let { arr ->
+                            (0 until arr.length()).map { arr.getString(it) }.filter { it.isNotBlank() }
+                        } ?: listOfNotNull(
+                            // Versions before 1.4.2.1 stored a single photo.
+                            if (o.isNull("photoPath")) null else o.optString("photoPath").ifBlank { null }
+                        ),
                     )
                 )
             }
@@ -204,6 +224,7 @@ class InventoryStore(context: Context) {
                     .put("type", n.type.name)
                     .put("parentId", n.parentId ?: JSONObject.NULL)
                     .put("createdAt", n.createdAt)
+                    .put("photos", JSONArray(n.photoPaths))
                     .put("photoPath", n.photoPath ?: JSONObject.NULL)
             )
         }

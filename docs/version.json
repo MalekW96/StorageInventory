@@ -1,4 +1,4 @@
 {
-  "version": "1.3.1.1",
-  "notes": "Export any storage or container to Excel from its ⋮ menu (every item with type, location, QR code, date added, photo). New activity log of every action with date and time, exportable to Excel from Settings for troubleshooting."
+  "version": "1.4.2.1",
+  "notes": "Several photos per item: tap “Add another photo” while adding, swipe through them, delete any one. After creating a storage you're no longer sent straight to the camera — press + to add items by photo or with QR code + photo."
 }

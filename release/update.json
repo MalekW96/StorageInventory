@@ -1,6 +1,6 @@
 {
-  "versionCode": 6,
-  "versionName": "1.3.1.1",
-  "apkUrl": "https://github.com/MalekW96/StorageInventory/releases/download/v1.3.1.1/StorageInventory.apk",
-  "notes": "Export any storage or container to Excel from its ⋮ menu: every item inside with type, location, QR code, date and time added, photo and contents. New activity log records every action with date and time; export it to Excel from Settings › Troubleshooting."
+  "versionCode": 7,
+  "versionName": "1.4.2.1",
+  "apkUrl": "https://github.com/MalekW96/StorageInventory/releases/download/v1.4.2.1/StorageInventory.apk",
+  "notes": "Several photos per item: tap “Add another photo” while adding, swipe through them, delete any one. After creating a storage you're no longer sent straight to the camera: press + to add items by photo or with QR code + photo."
 }

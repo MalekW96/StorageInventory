@@ -152,20 +152,27 @@ object PhotoSimilarity {
     ): List<Pair<Node, Float>> = withContext(Dispatchers.Default) {
         val query = analyse(queryPath) ?: throw Exception("Couldn't read the photo.")
         val cached = cache(context)
-        val withPhotos = candidates.filter { it.photoPath != null }
+        val withPhotos = candidates.filter { it.photoPaths.isNotEmpty() }
+        val total = withPhotos.sumOf { it.photoPaths.size }
+        var done = 0
         var changed = false
         val scored = ArrayList<Pair<Node, Float>>()
-        withPhotos.forEachIndexed { i, node ->
-            withContext(Dispatchers.Main) { onProgress(i, withPhotos.size) }
-            val path = node.photoPath!!
-            val features = synchronized(lock) { cached[path] } ?: analyse(path)?.also {
-                synchronized(lock) { cached[path] = it }
-                changed = true
+        for (node in withPhotos) {
+            // A node matches as well as its best-matching photo.
+            var best = -1f
+            for (path in node.photoPaths) {
+                withContext(Dispatchers.Main) { onProgress(done, total) }
+                val features = synchronized(lock) { cached[path] } ?: analyse(path)?.also {
+                    synchronized(lock) { cached[path] = it }
+                    changed = true
+                }
+                if (features != null) best = maxOf(best, similarity(query, features))
+                done++
             }
-            if (features != null) scored.add(node to similarity(query, features))
+            if (best >= 0f) scored.add(node to best)
         }
         if (changed) saveCache(context)
-        withContext(Dispatchers.Main) { onProgress(withPhotos.size, withPhotos.size) }
+        withContext(Dispatchers.Main) { onProgress(total, total) }
         scored.filter { it.second >= 0.2f }.sortedByDescending { it.second }.take(15)
     }
 }

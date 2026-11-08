@@ -48,7 +48,7 @@ object Exporter {
                         level,
                         if (child.hasQr) child.qr else "(none)",
                         fmt(child.createdAt),
-                        if (child.photoPath != null) "Yes" else "No",
+                        child.photoPaths.size,
                         contents,
                     )
                 )
@@ -59,7 +59,7 @@ object Exporter {
         val (items, containers) = store.countInside(root.id)
         val contentsSheet = XlsxSheet(
             name = "Contents",
-            header = listOf("#", "Name", "Type", "Location", "Directly inside", "Level", "QR code", "Added", "Photo", "Contents"),
+            header = listOf("#", "Name", "Type", "Location", "Directly inside", "Level", "QR code", "Added", "Photos", "Contents"),
             rows = rows,
             widths = listOf(6, 30, 18, 40, 24, 7, 22, 21, 8, 26),
         )

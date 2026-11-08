@@ -2,7 +2,7 @@
  * Everything is stored on the device (IndexedDB). No account, no server. */
 'use strict';
 
-const APP_VERSION = '1.3.1.1';
+const APP_VERSION = '1.4.2.1';
 
 // ===========================================================================
 // Small helpers
@@ -21,6 +21,9 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const countText = ({ items, containers }) =>
   containers ? `${plural(items, 'item')} · ${plural(containers, 'container')}` : plural(items, 'item');
 const canHold = (n) => n.type !== 'ITEM';
+const photosOf = (n) => (n && n.photoIds) || [];
+const mainPhoto = (n) => photosOf(n)[0] || null;
+const photoCount = (n) => photosOf(n).length;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const ICON = {
@@ -101,7 +104,17 @@ window.addEventListener('unhandledrejection', (e) => Log.add('Error', String(e.r
 // ===========================================================================
 const Store = {
   nodes: [],
-  async load() { this.nodes = await DB.all('nodes'); },
+  async load() {
+    this.nodes = await DB.all('nodes');
+    // Versions before 1.4.2.1 kept a single photoId; convert to a list.
+    for (const n of this.nodes) {
+      if (!Array.isArray(n.photoIds)) {
+        n.photoIds = n.photoId ? [n.photoId] : [];
+        delete n.photoId;
+        await DB.put('nodes', n);
+      }
+    }
+  },
   get(id) { return this.nodes.find((n) => n.id === id) || null; },
   storages() { return this.nodes.filter((n) => !n.parentId).sort((a, b) => a.name.localeCompare(b.name)); },
   children(id) {
@@ -127,12 +140,12 @@ const Store = {
     }
     return { items, containers };
   },
-  async add({ qr = '', name, type, parentId = null, photoId = null }) {
-    const node = { id: uid(), qr, name: name.trim(), type, parentId, createdAt: Date.now(), photoId };
+  async add({ qr = '', name, type, parentId = null, photoIds = [] }) {
+    const node = { id: uid(), qr, name: name.trim(), type, parentId, createdAt: Date.now(), photoIds: [...photoIds] };
     this.nodes.push(node);
     await DB.put('nodes', node);
     Log.add(`Added ${type.toLowerCase()}`, `“${node.name}”` + (qr ? ` · QR ${qr}` : ' · no QR') +
-      (parentId ? ` · in ${this.path(parentId).map((p) => p.name).join(' › ')}` : '') + (photoId ? ' · with photo' : ' · no photo'));
+      (parentId ? ` · in ${this.path(parentId).map((p) => p.name).join(' › ')}` : '') + (photoIds.length ? ` · ${photoIds.length} photo(s)` : ' · no photo'));
     return node;
   },
   async update(id, patch) {
@@ -143,7 +156,21 @@ const Store = {
     await DB.put('nodes', n);
     if ('name' in patch) Log.add('Renamed', `“${before.name}” → “${n.name}”`);
     if ('qr' in patch) Log.add('QR code assigned', `“${n.name}” · QR ${n.qr}`);
-    if ('photoId' in patch) Log.add(before.photoId ? 'Photo replaced' : 'Photo added', `“${n.name}”`);
+  },
+  async addPhoto(id, photoId) {
+    const n = this.get(id);
+    if (!n) return;
+    n.photoIds = [...photosOf(n), photoId];
+    await DB.put('nodes', n);
+    Log.add('Photo added', `“${n.name}” · now ${n.photoIds.length} photo(s)`);
+  },
+  async removePhoto(id, photoId) {
+    const n = this.get(id);
+    if (!n) return;
+    n.photoIds = photosOf(n).filter((p) => p !== photoId);
+    await DB.put('nodes', n);
+    await Photos.remove(photoId);
+    Log.add('Photo deleted', `“${n.name}” · ${n.photoIds.length} photo(s) left`);
   },
   async remove(id) {
     const target = this.get(id);
@@ -163,7 +190,7 @@ const Store = {
     this.nodes = this.nodes.filter((n) => !remove.has(n.id));
     for (const n of gone) {
       await DB.del('nodes', n.id);
-      if (n.photoId) await Photos.remove(n.photoId);
+      for (const p of photosOf(n)) await Photos.remove(p);
     }
   },
 };
@@ -514,25 +541,60 @@ function toast(text) {
   setTimeout(() => t.remove(), 2600);
 }
 
-function photoViewer(photoId) {
+/** Full-screen photos: swipe left/right; Delete is offered for photos of a saved entry. */
+function photoViewer(ids, start = 0, nodeId = null) {
+  if (!Array.isArray(ids)) ids = [ids];
+  if (!ids.length) return;
   const v = document.createElement('div');
   v.className = 'viewer';
-  v.innerHTML = `<img data-photo="${esc(photoId)}" data-kind="full" alt=""><p>Tap to close</p>`;
-  v.onclick = () => v.remove();
+  v.innerHTML = `<div class="pages">${ids.map((id) =>
+      `<div class="page" data-pid="${esc(id)}"><img data-photo="${esc(id)}" data-kind="full" alt=""></div>`).join('')}</div>
+    <div class="viewer-bar">
+      ${nodeId ? '<button class="btn text danger" data-v="delete">Delete</button>' : '<span style="width:72px"></span>'}
+      <span class="viewer-count"></span>
+      <button class="btn text light" data-v="close">Close</button>
+    </div>`;
   document.body.appendChild(v);
   hydratePhotos(v);
+  const pages = $('.pages', v);
+  const current = () => Math.round(pages.scrollLeft / Math.max(1, pages.clientWidth));
+  const count = () => { $('.viewer-count', v).textContent = ids.length > 1 ? `${current() + 1} / ${ids.length} · swipe` : 'Tap photo to close'; };
+  requestAnimationFrame(() => { pages.scrollLeft = start * pages.clientWidth; count(); });
+  pages.addEventListener('scroll', count, { passive: true });
+  pages.addEventListener('click', () => v.remove());
+  $('[data-v="close"]', v).onclick = () => v.remove();
+  const del = $('[data-v="delete"]', v);
+  if (del) del.onclick = async () => {
+    const pid = ids[current()];
+    const idx = current();
+    const ok = await confirmDialog({ title: 'Delete this photo?', text: "This can't be undone.", ok: 'Delete', danger: true });
+    if (!ok) return;
+    await Store.removePhoto(nodeId, pid);
+    v.remove();
+    render();
+    const left = photosOf(Store.get(nodeId));
+    if (left.length) photoViewer(left, Math.min(idx, left.length - 1), nodeId);
+  };
+}
+
+/** Thumbnail strip used in dialogs and headers. */
+function photoStrip(ids, { removable = false, big = false } = {}) {
+  return `<div class="strip${big ? ' big' : ''}">${ids.map((id, i) =>
+    `<div class="strip-item"><img data-photo="${esc(id)}" data-kind="${big ? 'full' : 'thumb'}" data-strip="${i}" alt="">
+      ${removable ? `<button class="strip-x" data-remove="${esc(id)}" aria-label="Remove photo">${ICON.close}</button>` : ''}</div>`).join('')}</div>`;
 }
 
 /**
  * Name (and optionally type) dialog for a new entry, with photo preview and retake.
  * Resolves { name, type, photoId } or null when cancelled (the photo is then deleted).
  */
-function entryDialog({ title, message, label = 'Name', confirm = 'Done', photoId = null, needType = false, photoTitle }) {
+function entryDialog({ title, message, label = 'Name', confirm = 'Done', photoIds = [], needType = false, photoTitle }) {
   return new Promise((resolve) => {
-    let photo = photoId;
+    let photos = [...photoIds];
     let type = null;
-    const photoHtml = () => photo
-      ? `<img class="dialog-photo" data-photo="${esc(photo)}" alt=""><button class="btn text" id="d-retake">Retake photo</button>`
+    const photoHtml = () => photos.length
+      ? photoStrip(photos, { removable: true }) +
+        `<div class="no-photo" style="padding:0"><span>${photos.length === 1 ? '1 photo' : photos.length + ' photos'}</span><button class="btn text" id="d-retake">Add another photo</button></div>`
       : `<div class="no-photo" style="padding-left:0"><span>No photo</span><button class="btn text" id="d-retake">Take photo</button></div>`;
     const body = `
       <div id="d-photo">${photoHtml()}</div>
@@ -551,21 +613,24 @@ function entryDialog({ title, message, label = 'Name', confirm = 'Done', photoId
     close = dialog({
       title, body, dismissable: false,
       actions: [
-        { label: 'Cancel', onClick: () => { if (photo) Photos.remove(photo); done(null); } },
-        { label: confirm, id: 'd-ok', onClick: () => done({ name: $('#d-name').value.trim(), type, photoId: photo }) },
+        { label: 'Cancel', onClick: () => { photos.forEach((p) => Photos.remove(p)); done(null); } },
+        { label: confirm, id: 'd-ok', onClick: () => done({ name: $('#d-name').value.trim(), type, photoIds: photos }) },
       ],
       onOpen: (scrim) => {
+        const refresh = () => { $('#d-photo', scrim).innerHTML = photoHtml(); hydratePhotos(scrim); wire(); };
         const wire = () => {
           $('#d-retake', scrim).onclick = async () => {
-            const r = await Camera.photo({ title: photoTitle || 'Take a photo', allowSkip: false });
-            if (r && r.photoId) {
-              if (photo) await Photos.remove(photo);
-              photo = r.photoId;
-              $('#d-photo', scrim).innerHTML = photoHtml();
-              hydratePhotos(scrim);
-              wire();
-            }
+            const r = await Camera.photo({ title: photoTitle || 'Take another photo', subtitle: 'Another angle of the same thing.', allowSkip: false });
+            if (r && r.photoId) { photos.push(r.photoId); refresh(); }
           };
+          scrim.querySelectorAll('[data-remove]').forEach((b) => b.onclick = async (e) => {
+            e.stopPropagation();
+            const id = b.dataset.remove;
+            photos = photos.filter((p) => p !== id);
+            await Photos.remove(id);
+            refresh();
+          });
+          scrim.querySelectorAll('#d-photo [data-strip]').forEach((img) => img.onclick = () => photoViewer(photos, Number(img.dataset.strip)));
         };
         wire();
         scrim.querySelectorAll('input[name="d-type"]').forEach((r) => r.onchange = () => {
@@ -652,8 +717,8 @@ function badge(node, small = false) {
 }
 
 function nodeRow(node, detail, { score } = {}) {
-  const thumb = node.photoId
-    ? `<div class="thumb-wrap"><img class="thumb" data-photo="${esc(node.photoId)}" alt="">${badge(node, true)}</div>`
+  const thumb = mainPhoto(node)
+    ? `<div class="thumb-wrap"><img class="thumb" data-photo="${esc(mainPhoto(node))}" alt="">${badge(node, true)}</div>`
     : `<div class="thumb-wrap">${badge(node)}</div>`;
   return `<div class="card row clickable" data-open="${esc(node.id)}">
     ${thumb}
@@ -722,16 +787,22 @@ function renderDetail() {
   const node = Store.get(state.stack[state.stack.length - 1]);
   const crumbs = state.stack.length > 1 ? Store.location(node.id) : typeLabel(node);
   const kids = Store.children(node.id);
-  const header = node.photoId
-    ? `<img class="photo-header" data-photo="${esc(node.photoId)}" data-kind="full" data-view="${esc(node.photoId)}" alt="">`
+  const ph = photosOf(node);
+  const header = ph.length
+    ? (ph.length === 1
+        ? `<img class="photo-header" data-photo="${esc(ph[0])}" data-kind="full" data-view-node="${esc(node.id)}" data-index="0" alt="">`
+        : `<div class="strip big">${ph.map((id, i) => `<div class="strip-item"><img data-photo="${esc(id)}" data-kind="full" data-view-node="${esc(node.id)}" data-index="${i}" alt=""></div>`).join('')}</div>`) +
+      `<div class="no-photo" style="padding:0 0 0 4px"><span>${ph.length === 1 ? '1 photo' : ph.length + ' photos · swipe to see all'}</span>
+         <button class="btn text" data-act="photo-node" data-id="${esc(node.id)}">Add photo</button></div>`
     : `<div class="card no-photo"><span>No photo of this ${esc(typeLabel(node).toLowerCase())} yet</span>
          <button class="btn text" data-act="photo-node" data-id="${esc(node.id)}">Take photo</button></div>`;
   let list;
   if (!kids.length) {
-    list = `<p class="hint" style="text-align:center;padding:32px 16px">Nothing in here yet. Tap “Add” to scan an item's QR code or add it by photo.</p>`;
+    list = `<p class="hint" style="text-align:center;padding:32px 16px">No items yet. Press + to start adding.</p>`;
   } else {
     list = `<div class="label">Total inside: ${esc(countText(Store.countInside(node.id)))}</div>` +
-      kids.map((c) => nodeRow(c, canHold(c) ? `Container · ${countText(Store.countInside(c.id))}` : 'Item')).join('');
+      kids.map((c) => nodeRow(c, (canHold(c) ? `Container · ${countText(Store.countInside(c.id))}` : 'Item') +
+        (photoCount(c) > 1 ? ` · ${photoCount(c)} photos` : ''))).join('');
   }
   return topbar({
     title: node.name, crumbs, backBtn: true,
@@ -844,22 +915,25 @@ function renderSettings() {
 // ===========================================================================
 function itemDialog(item) {
   Log.add('Opened item', `“${item.name}”`);
-  const photo = item.photoId
-    ? `<img class="dialog-photo" style="height:220px" data-photo="${esc(item.photoId)}" data-kind="full" data-view="${esc(item.photoId)}" alt="">`
+  const ph = photosOf(item);
+  const photo = ph.length
+    ? (ph.length === 1
+        ? `<img class="dialog-photo" style="height:220px" data-photo="${esc(ph[0])}" data-kind="full" data-strip="0" alt="">`
+        : photoStrip(ph, { big: true })) +
+      `<p class="small-muted" style="margin-top:6px">${ph.length === 1 ? '1 photo' : ph.length + ' photos · swipe to see all'}</p>`
     : `<p class="small-muted">No photo yet</p>`;
   const close = dialog({
     title: item.name,
     body: `${photo}<p style="margin-top:10px">Stored in: ${esc(Store.location(item.id) || 'Top level')}</p>`,
     actions: [
       { label: 'Info', onClick: () => { close(); infoDialog(item); } },
-      { label: item.photoId ? 'Retake photo' : 'Take photo', onClick: () => { close(); flowRetakePhoto(item); } },
+      { label: 'Add photo', onClick: () => { close(); flowAddPhoto(item); } },
       { label: 'Rename', onClick: () => { close(); flowRename(item); } },
       { label: 'Delete', kind: 'danger', onClick: () => { close(); flowDelete(item); } },
       { label: 'Close', onClick: () => close() },
     ],
     onOpen: (scrim) => {
-      const img = $('[data-view]', scrim);
-      if (img) img.onclick = () => photoViewer(img.dataset.view);
+      scrim.querySelectorAll('[data-strip]').forEach((img) => img.onclick = () => { close(); photoViewer(photosOf(item), Number(img.dataset.strip), item.id); });
     },
   });
 }
@@ -870,7 +944,7 @@ function infoDialog(node) {
   const close = dialog({
     title: 'Info',
     body: row('Name', node.name) + row('Type', typeLabel(node)) + row('Added', fmtDate(node.createdAt)) +
-      row('Stored in', Store.location(node.id) || 'Top level') +
+      row('Stored in', Store.location(node.id) || 'Top level') + row('Photos', String(photoCount(node))) +
       (canHold(node) ? row('Contains', countText(Store.countInside(node.id))) : '') +
       row('QR code', node.qr || 'None yet (use “Assign QR code” in the ⋮ menu)'),
     actions: [{ label: 'Close', onClick: () => close() }],
@@ -881,7 +955,7 @@ function nodeMenu(anchor, node) {
   showMenu(anchor, [
     { label: 'Info', onClick: () => infoDialog(node) },
     !node.qr ? { label: 'Assign QR code', onClick: () => flowAssignQr(node) } : null,
-    { label: node.photoId ? 'Retake photo' : 'Take photo', onClick: () => flowRetakePhoto(node) },
+    { label: 'Add photo', onClick: () => flowAddPhoto(node) },
     canHold(node) ? { label: 'Export to Excel', onClick: () => exportStorageExcel(node) } : null,
     { label: 'Rename', onClick: () => flowRename(node) },
     { label: 'Delete', danger: true, onClick: () => flowDelete(node) },
@@ -902,15 +976,6 @@ async function showDuplicate(node) {
   if (open) openNode(node);
 }
 
-async function readyDialog(storage) {
-  const scan = await confirmDialog({
-    title: `“${storage.name}” is ready`,
-    text: 'Start adding items by scanning the next QR code. You can also add items by photo with the Add button.',
-    ok: 'Scan QR code', cancel: 'Later',
-  });
-  if (scan) flowAddChildByQr(storage.id);
-}
-
 async function flowNewStorage() {
   const qr = await Camera.scan({ title: 'Scan the Storage QR code', subtitle: 'Point the camera at the QR code on the storage unit.', keepOpen: true });
   if (!qr) return Camera.close();
@@ -920,12 +985,11 @@ async function flowNewStorage() {
   if (!shot) return;
   const res = await entryDialog({
     title: 'Name this storage', message: `QR code: ${qr}`, label: 'Storage name', confirm: 'Done',
-    photoId: shot.photoId || null, photoTitle: 'Take a photo of the storage unit',
+    photoIds: shot.photoId ? [shot.photoId] : [], photoTitle: 'Another photo of the storage unit',
   });
   if (!res) return;
-  const storage = await Store.add({ qr, name: res.name, type: 'STORAGE', photoId: res.photoId });
+  const storage = await Store.add({ qr, name: res.name, type: 'STORAGE', photoIds: res.photoIds });
   openNode(storage);
-  readyDialog(storage);
 }
 
 async function flowTemporaryStorage() {
@@ -935,9 +999,8 @@ async function flowTemporaryStorage() {
     label: 'Storage name', confirm: 'Create', photoTitle: 'Take a photo of the storage',
   });
   if (!res) return;
-  const storage = await Store.add({ qr: '', name: res.name, type: 'STORAGE', photoId: res.photoId });
+  const storage = await Store.add({ qr: '', name: res.name, type: 'STORAGE', photoIds: res.photoIds });
   openNode(storage);
-  readyDialog(storage);
 }
 
 async function flowAddChildByQr(parentId) {
@@ -955,10 +1018,10 @@ async function flowAddChildByQr(parentId) {
     if (!shot) return;
     const res = await entryDialog({
       title: `Add to “${parent.name}”`, message: `QR code: ${qr}`, needType: true,
-      photoId: shot.photoId || null, photoTitle: 'Take a photo of the item(s)',
+      photoIds: shot.photoId ? [shot.photoId] : [], photoTitle: 'Another photo of the item(s)',
     });
     if (!res) return;
-    await Store.add({ qr, name: res.name, type: res.type, parentId, photoId: res.photoId });
+    await Store.add({ qr, name: res.name, type: res.type, parentId, photoIds: res.photoIds });
     render();
     const again = await confirmDialog({
       title: `Added “${res.name}”`, text: `Scan the next QR code to keep adding to “${parent.name}”?`,
@@ -1004,10 +1067,10 @@ async function flowAddByPhoto(targetId = null) {
   if (!target) { await Photos.remove(shot.photoId); return; }
   const res = await entryDialog({
     title: `Add to “${target.name}”`, message: 'No QR code (added by photo)', needType: true,
-    photoId: shot.photoId, photoTitle: 'Take a photo of the item',
+    photoIds: [shot.photoId], photoTitle: 'Another photo of the item',
   });
   if (!res) return;
-  await Store.add({ qr: '', name: res.name, type: res.type, parentId: target.id, photoId: res.photoId });
+  await Store.add({ qr: '', name: res.name, type: res.type, parentId: target.id, photoIds: res.photoIds });
   openNode(target);
   toast(`Added “${res.name}”`);
 }
@@ -1022,12 +1085,10 @@ async function flowAssignQr(node) {
   toast(`QR code attached to “${node.name}”`);
 }
 
-async function flowRetakePhoto(node) {
-  const shot = await Camera.photo({ title: `Photo of “${node.name}”`, allowSkip: false });
+async function flowAddPhoto(node) {
+  const shot = await Camera.photo({ title: `Photo of “${node.name}”`, subtitle: photoCount(node) ? 'Adds another photo.' : '', allowSkip: false });
   if (!shot || !shot.photoId) return;
-  const old = node.photoId;
-  await Store.update(node.id, { photoId: shot.photoId });
-  if (old) await Photos.remove(old);
+  await Store.addPhoto(node.id, shot.photoId);
   render();
 }
 
@@ -1167,15 +1228,23 @@ async function flowSearchByPhoto() {
     const img = await loadImage(s.photoUrl);
     const query = await Similar.features(img);
     if (Similar.failed) s.note = "The AI model couldn't load (no internet?), so this search used colour matching only.";
-    const withPhotos = Store.nodes.filter((n) => n.photoId);
+    const withPhotos = Store.nodes.filter((n) => photoCount(n));
+    const total = withPhotos.reduce((a, n) => a + photoCount(n), 0);
     const scored = [];
-    for (let i = 0; i < withPhotos.length; i++) {
-      if (state.search.photoUrl !== token) return; // search was cleared
-      s.progress = { done: i, total: withPhotos.length };
-      if (state.screen === 'search') render();
-      const f = await Similar.featuresForPhoto(withPhotos[i].photoId);
-      if (f) scored.push({ node: withPhotos[i], score: Similar.score(query, f) });
-      await sleep(0);
+    let done = 0;
+    for (const node of withPhotos) {
+      // A node matches as well as its best-matching photo.
+      let best = -1;
+      for (const pid of photosOf(node)) {
+        if (state.search.photoUrl !== token) return; // search was cleared
+        s.progress = { done, total };
+        if (state.screen === 'search') render();
+        const f = await Similar.featuresForPhoto(pid);
+        if (f) best = Math.max(best, Similar.score(query, f));
+        done++;
+        await sleep(0);
+      }
+      if (best >= 0) scored.push({ node, score: best });
     }
     s.results = scored.filter((r) => r.score >= 0.3).sort((a, b) => b.score - a.score).slice(0, 15);
     const best = s.results[0];
@@ -1198,9 +1267,10 @@ async function exportBackup() {
   toast('Preparing backup…');
   const photos = [];
   for (const n of Store.nodes) {
-    if (!n.photoId) continue;
-    const rec = await DB.get('photos', n.photoId);
-    if (rec) photos.push({ id: rec.id, full: await blobToDataUrl(rec.full) });
+    for (const pid of photosOf(n)) {
+      const rec = await DB.get('photos', pid);
+      if (rec) photos.push({ id: rec.id, full: await blobToDataUrl(rec.full) });
+    }
   }
   const data = { app: 'StorageInventory', format: 1, version: APP_VERSION, exportedAt: Date.now(), nodes: Store.nodes, photos };
   const d = new Date();
@@ -1244,7 +1314,9 @@ function importBackup() {
       } catch (e) { console.warn('Photo skipped', e); }
     }
     for (const n of data.nodes) {
-      await DB.put('nodes', { ...n, photoId: n.photoId ? idMap.get(n.photoId) || null : null });
+      const ids = Array.isArray(n.photoIds) ? n.photoIds : (n.photoId ? [n.photoId] : []);
+      const { photoId, ...rest } = n;
+      await DB.put('nodes', { ...rest, photoIds: ids.map((id) => idMap.get(id)).filter(Boolean) });
     }
     await Store.load();
     Log.add('Backup restored', `${data.nodes.length} entries from ${fmtDate(data.exportedAt)}`);
@@ -1443,7 +1515,7 @@ function storageWorkbook(root) {
     for (const child of Store.children(parent.id)) {
       rows.push([
         rows.length + 1, child.name, typeLabel(child), Store.location(child.id), parent.name, level,
-        child.qr || '(none)', fmtDate(child.createdAt), child.photoId ? 'Yes' : 'No',
+        child.qr || '(none)', fmtDate(child.createdAt), photoCount(child),
         canHold(child) ? countText(Store.countInside(child.id)) : '',
       ]);
       if (canHold(child)) walk(child, level + 1);
@@ -1452,7 +1524,7 @@ function storageWorkbook(root) {
   walk(root, 1);
   const c = Store.countInside(root.id);
   return [
-    { name: 'Contents', header: ['#', 'Name', 'Type', 'Location', 'Directly inside', 'Level', 'QR code', 'Added', 'Photo', 'Contents'],
+    { name: 'Contents', header: ['#', 'Name', 'Type', 'Location', 'Directly inside', 'Level', 'QR code', 'Added', 'Photos', 'Contents'],
       rows, widths: [6, 30, 18, 40, 24, 7, 22, 21, 8, 26] },
     { name: 'Summary', header: ['Field', 'Value'], widths: [20, 50], rows: [
       ['Name', root.name], ['Type', typeLabel(root)], ['Location', Store.location(root.id) || 'Top level'],
@@ -1515,8 +1587,12 @@ document.addEventListener('click', (e) => {
     if (node) nodeMenu(menuBtn, node);
     return;
   }
-  const view = t.closest('#app [data-view]');
-  if (view) return photoViewer(view.dataset.view);
+  const viewNode = t.closest('#app [data-view-node]');
+  if (viewNode) {
+    const n = Store.get(viewNode.dataset.viewNode);
+    if (n) photoViewer(photosOf(n), Number(viewNode.dataset.index || 0), n.id);
+    return;
+  }
   const open = t.closest('#app [data-open]');
   if (open) {
     const node = Store.get(open.dataset.open);
@@ -1544,10 +1620,10 @@ document.addEventListener('click', (e) => {
   } else if (a === 'detail-add') {
     const id = state.stack[state.stack.length - 1];
     showMenu(act, [
-      { label: 'Scan QR code', onClick: () => flowAddChildByQr(id) },
-      { label: 'Take photo (no QR code)', onClick: () => flowAddByPhoto(id) },
+      { label: 'Add by photo', onClick: () => flowAddByPhoto(id) },
+      { label: 'Add with QR code + photo', onClick: () => flowAddChildByQr(id) },
     ]);
-  } else if (a === 'photo-node') { const n = Store.get(act.dataset.id); if (n) flowRetakePhoto(n); }
+  } else if (a === 'photo-node') { const n = Store.get(act.dataset.id); if (n) flowAddPhoto(n); }
   else if (a === 'search-photo') flowSearchByPhoto();
   else if (a === 'search-qr') flowFindByQr();
   else if (a === 'clear-photo') { clearSearchPhoto(); render(); }

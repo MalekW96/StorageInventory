@@ -29,6 +29,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -196,15 +202,21 @@ private sealed interface ScanMode {
 }
 
 /** A scanned code waiting to be named (and maybe photographed) before it's saved. */
-private data class PendingNew(val qr: String, val parentId: String?, val photo: String?)
+private data class PendingNew(val qr: String, val parentId: String?, val photos: List<String>)
 
 // Simple string encoding so pending state survives Android closing the app while
 // the camera app is open.
 private const val SEP = "\u001F"
-private fun PendingNew.encode() = listOf(qr, parentId ?: "", photo ?: "").joinToString(SEP)
+private const val PSEP = "\u001E"
+private fun splitPhotos(raw: String?): List<String> = raw?.split(PSEP)?.filter { it.isNotBlank() } ?: emptyList()
+private fun joinPhotos(list: List<String>): String? = list.takeIf { it.isNotEmpty() }?.joinToString(PSEP)
+private fun PendingNew.encode() = listOf(qr, parentId ?: "", photos.joinToString(PSEP)).joinToString(SEP)
 private fun decodePending(s: String?): PendingNew? = s?.split(SEP)?.takeIf { it.size == 3 }?.let {
-    PendingNew(it[0], it[1].ifEmpty { null }, it[2].ifEmpty { null })
+    PendingNew(it[0], it[1].ifEmpty { null }, splitPhotos(it[2]))
 }
+
+/** Full-screen photo viewer state: the photos, where to start, and the entry they belong to (for deleting). */
+private data class ViewerState(val paths: List<String>, val index: Int, val nodeId: String?)
 
 private val stackSaver = listSaver<SnapshotStateList<String>, String>(
     save = { it.toList() },
@@ -222,31 +234,30 @@ fun InventoryApp(store: InventoryStore) {
     var showSearch by rememberSaveable { mutableStateOf(false) }
     var searchPhoto by rememberSaveable { mutableStateOf<String?>(null) }
     // Photo-only item being added ("Take photo to add to existing storage")
-    var photoItemPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var photoItemRaw by rememberSaveable { mutableStateOf<String?>(null) }
     var photoItemTarget by rememberSaveable { mutableStateOf<String?>(null) }
     // Temporary storage being created
     var creatingTemp by rememberSaveable { mutableStateOf(false) }
-    var tempPhoto by rememberSaveable { mutableStateOf<String?>(null) }
+    var tempPhotosRaw by rememberSaveable { mutableStateOf<String?>(null) }
     var scanMode by remember { mutableStateOf<ScanMode?>(null) }
 
     // Dialog state
     var pendingStorageRaw by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingChildRaw by rememberSaveable { mutableStateOf<String?>(null) }
-    var askStartAddingFor by rememberSaveable { mutableStateOf<String?>(null) }
     var askAnother by remember { mutableStateOf<Pair<String, String>?>(null) }  // parentId to added name
     var duplicate by remember { mutableStateOf<Node?>(null) }
     var notFoundQr by remember { mutableStateOf<String?>(null) }
     var renaming by remember { mutableStateOf<Node?>(null) }
     var deleting by remember { mutableStateOf<Node?>(null) }
     var viewingItem by remember { mutableStateOf<String?>(null) }
-    var viewingPhoto by remember { mutableStateOf<String?>(null) }
+    var viewer by remember { mutableStateOf<ViewerState?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
     var infoFor by remember { mutableStateOf<String?>(null) }
 
     // --- Photos -------------------------------------------------------------
     // captureTarget says what the photo being taken is for:
     //   "S<sep>qr"           new storage, "C<sep>parent<sep>qr"  new item/container,
-    //   "N<sep>nodeId"       replace the photo of an existing entry
+    //   "N<sep>nodeId"       add a photo to an existing entry
     var captureTarget by rememberSaveable { mutableStateOf<String?>(null) }
 
     fun onPhotoResult(target: String, path: String?) {
@@ -258,23 +269,18 @@ fun InventoryApp(store: InventoryStore) {
                 val qr = if (isStorage) parts[1] else parts[2]
                 val old = decodePending(if (isStorage) pendingStorageRaw else pendingChildRaw)
                     ?.takeIf { it.qr == qr }
-                val photo = if (path != null) {
-                    old?.photo?.let { File(it).delete() }
-                    path
-                } else old?.photo
-                val encoded = PendingNew(qr, parentId, photo).encode()
+                val photos = (old?.photos ?: emptyList()) + listOfNotNull(path)
+                val encoded = PendingNew(qr, parentId, photos).encode()
                 if (isStorage) pendingStorageRaw = encoded else pendingChildRaw = encoded
             }
-            "N" -> if (path != null) store.setPhoto(parts[1], path)
+            "N" -> if (path != null) store.addPhoto(parts[1], path)
             "P" -> if (path != null) {
-                photoItemPath?.let { if (it != path) File(it).delete() }
-                photoItemPath = path
-            } else if (photoItemPath == null) {
+                photoItemRaw = joinPhotos(splitPhotos(photoItemRaw) + path)
+            } else if (photoItemRaw == null) {
                 photoItemTarget = null
             }
             "T" -> if (path != null) {
-                tempPhoto?.let { File(it).delete() }
-                tempPhoto = path
+                tempPhotosRaw = joinPhotos(splitPhotos(tempPhotosRaw) + path)
             }
             "Q" -> if (path != null) {
                 searchPhoto?.let { File(it).delete() }
@@ -332,13 +338,19 @@ fun InventoryApp(store: InventoryStore) {
     }
 
     fun clearPhotoItem() {
-        photoItemPath?.let { File(it).delete() }
-        photoItemPath = null
+        splitPhotos(photoItemRaw).forEach { File(it).delete() }
+        photoItemRaw = null
         photoItemTarget = null
     }
 
     fun discardPending(raw: String?) {
-        decodePending(raw)?.photo?.let { File(it).delete() }
+        decodePending(raw)?.photos?.forEach { File(it).delete() }
+    }
+
+    /** Removes one not-yet-saved photo from a pending entry. */
+    fun removePendingPhoto(raw: String?, path: String): String? {
+        File(path).delete()
+        return decodePending(raw)?.let { it.copy(photos = it.photos - path).encode() }
     }
 
     fun openNode(node: Node) {
@@ -434,7 +446,7 @@ fun InventoryApp(store: InventoryStore) {
                 onRename = { renaming = it },
                 onDelete = { deleting = it },
                 onPhoto = { takePhoto("N$SEP${it.id}") },
-                onViewPhoto = { viewingPhoto = it },
+                onViewPhoto = { node, index -> viewer = ViewerState(node.photoPaths, index, node.id) },
                 onInfo = { infoFor = it.id },
             )
         }
@@ -504,14 +516,15 @@ fun InventoryApp(store: InventoryStore) {
             message = "QR code: ${pendingStorage.qr}",
             label = "Storage name",
             confirmText = "Done",
-            photoPath = pendingStorage.photo,
+            photoPaths = pendingStorage.photos,
             onTakePhoto = { takePhoto("S$SEP${pendingStorage.qr}") },
+            onRemovePhoto = { pendingStorageRaw = removePendingPhoto(pendingStorageRaw, it) },
+            onViewPhoto = { i -> viewer = ViewerState(pendingStorage.photos, i, null) },
             onConfirm = { name ->
-                val storage = store.add(pendingStorage.qr, name, NodeType.STORAGE, null, pendingStorage.photo)
+                val storage = store.add(pendingStorage.qr, name, NodeType.STORAGE, null, pendingStorage.photos)
                 pendingStorageRaw = null
                 stack.clear()
                 stack.add(storage.id)
-                askStartAddingFor = storage.id
             },
             onDismiss = {
                 discardPending(pendingStorageRaw)
@@ -521,13 +534,13 @@ fun InventoryApp(store: InventoryStore) {
     }
 
     // Photo-only item: choose where it goes, then name it
-    val photoItem = photoItemPath
-    if (photoItem != null && scanMode == null) {
+    val photoItems = splitPhotos(photoItemRaw)
+    if (photoItems.isNotEmpty() && scanMode == null) {
         val target = photoItemTarget?.let { store.get(it) }
         if (target == null) {
             ChooseTargetDialog(
                 store = store,
-                photoPath = photoItem,
+                photoPath = photoItems.first(),
                 onPick = { photoItemTarget = it.id },
                 onScan = { scanMode = ScanMode.PickTarget },
                 onDismiss = { clearPhotoItem() },
@@ -536,11 +549,18 @@ fun InventoryApp(store: InventoryStore) {
             AddChildDialog(
                 parentName = target.name,
                 qr = "",
-                photoPath = photoItem,
+                photoPaths = photoItems,
                 onTakePhoto = { takePhoto("P") },
+                onRemovePhoto = { path ->
+                    File(path).delete()
+                    val left = photoItems - path
+                    photoItemRaw = joinPhotos(left)
+                    if (left.isEmpty()) photoItemTarget = null
+                },
+                onViewPhoto = { i -> viewer = ViewerState(photoItems, i, null) },
                 onConfirm = { type, name ->
-                    store.add("", name, type, target.id, photoItem)
-                    photoItemPath = null
+                    store.add("", name, type, target.id, photoItems)
+                    photoItemRaw = null
                     photoItemTarget = null
                     openNode(target)
                 },
@@ -556,45 +576,26 @@ fun InventoryApp(store: InventoryStore) {
             message = "No QR code needed. You can attach one later with “Assign QR code” in its ⋮ menu.",
             label = "Storage name",
             confirmText = "Create",
-            photoPath = tempPhoto,
+            photoPaths = splitPhotos(tempPhotosRaw),
             onTakePhoto = { takePhoto("T") },
+            onRemovePhoto = { path ->
+                File(path).delete()
+                tempPhotosRaw = joinPhotos(splitPhotos(tempPhotosRaw) - path)
+            },
+            onViewPhoto = { i -> viewer = ViewerState(splitPhotos(tempPhotosRaw), i, null) },
             onConfirm = { name ->
-                val storage = store.add("", name, NodeType.STORAGE, null, tempPhoto)
-                tempPhoto = null
+                val storage = store.add("", name, NodeType.STORAGE, null, splitPhotos(tempPhotosRaw))
+                tempPhotosRaw = null
                 creatingTemp = false
                 stack.clear()
                 stack.add(storage.id)
-                askStartAddingFor = storage.id
             },
             onDismiss = {
-                tempPhoto?.let { File(it).delete() }
-                tempPhoto = null
+                splitPhotos(tempPhotosRaw).forEach { File(it).delete() }
+                tempPhotosRaw = null
                 creatingTemp = false
             },
         )
-    }
-
-    // 2) Storage created -> start adding items?
-    askStartAddingFor?.let { id ->
-        val storage = store.get(id)
-        if (storage == null) {
-            askStartAddingFor = null
-        } else {
-            AlertDialog(
-                onDismissRequest = { askStartAddingFor = null },
-                title = { Text("“${storage.name}” is ready") },
-                text = { Text("Start adding items by scanning the next QR code. You can also add items by photo with the Add button.") },
-                confirmButton = {
-                    TextButton(onClick = {
-                        askStartAddingFor = null
-                        scanMode = ScanMode.AddTo(id)
-                    }) { Text("Scan QR code") }
-                },
-                dismissButton = {
-                    TextButton(onClick = { askStartAddingFor = null }) { Text("Later") }
-                },
-            )
-        }
     }
 
     // 3) Scanned something to add -> item or smaller container? (with its photo)
@@ -608,10 +609,12 @@ fun InventoryApp(store: InventoryStore) {
             AddChildDialog(
                 parentName = parent.name,
                 qr = pendingChild.qr,
-                photoPath = pendingChild.photo,
+                photoPaths = pendingChild.photos,
                 onTakePhoto = { takePhoto("C$SEP${parent.id}$SEP${pendingChild.qr}") },
+                onRemovePhoto = { pendingChildRaw = removePendingPhoto(pendingChildRaw, it) },
+                onViewPhoto = { i -> viewer = ViewerState(pendingChild.photos, i, null) },
                 onConfirm = { type, name ->
-                    store.add(pendingChild.qr, name, type, parent.id, pendingChild.photo)
+                    store.add(pendingChild.qr, name, type, parent.id, pendingChild.photos)
                     pendingChildRaw = null
                     askAnother = parent.id to name.trim()
                 },
@@ -657,7 +660,7 @@ fun InventoryApp(store: InventoryStore) {
                 item = item,
                 location = store.path(item.id).dropLast(1).joinToString(" › ") { it.name },
                 onPhoto = { takePhoto("N$SEP${item.id}") },
-                onViewPhoto = { viewingPhoto = it },
+                onViewPhoto = { i -> viewer = ViewerState(item.photoPaths, i, item.id) },
                 onRename = { renaming = item },
                 onDelete = { viewingItem = null; deleting = item },
                 onInfo = { infoFor = item.id },
@@ -666,8 +669,19 @@ fun InventoryApp(store: InventoryStore) {
         }
     }
 
-    viewingPhoto?.let { path ->
-        PhotoViewer(path = path, onDismiss = { viewingPhoto = null })
+    viewer?.let { v ->
+        // For saved entries, show the live list so deletions are reflected.
+        val paths = v.nodeId?.let { store.get(it)?.photoPaths } ?: v.paths
+        if (paths.isEmpty()) {
+            viewer = null
+        } else {
+            PhotoViewer(
+                paths = paths,
+                startIndex = v.index.coerceIn(0, paths.lastIndex),
+                onDelete = v.nodeId?.let { id -> { path: String -> store.removePhoto(id, path) } },
+                onDismiss = { viewer = null },
+            )
+        }
     }
 
     infoFor?.let { id ->
@@ -860,7 +874,7 @@ private fun DetailScreen(
     onRename: (Node) -> Unit,
     onDelete: (Node) -> Unit,
     onPhoto: (Node) -> Unit,
-    onViewPhoto: (String) -> Unit,
+    onViewPhoto: (Node, Int) -> Unit,
     onInfo: (Node) -> Unit,
 ) {
     val children = store.children(node.id)
@@ -913,12 +927,12 @@ private fun DetailScreen(
                 )
                 DropdownMenu(expanded = addOpen, onDismissRequest = { addOpen = false }) {
                     DropdownMenuItem(
-                        text = { Text("Scan QR code") },
-                        onClick = { addOpen = false; onScanAdd() },
+                        text = { Text("Add by photo") },
+                        onClick = { addOpen = false; onPhotoAdd() },
                     )
                     DropdownMenuItem(
-                        text = { Text("Take photo (no QR code)") },
-                        onClick = { addOpen = false; onPhotoAdd() },
+                        text = { Text("Add with QR code + photo") },
+                        onClick = { addOpen = false; onScanAdd() },
                     )
                 }
             }
@@ -934,16 +948,16 @@ private fun DetailScreen(
         ) {
             item {
                 PhotoHeader(
-                    photoPath = node.photoPath,
+                    photoPaths = node.photoPaths,
                     emptyText = "No photo of this ${typeLabel(node.type).lowercase()} yet",
-                    onView = onViewPhoto,
+                    onView = { index -> onViewPhoto(node, index) },
                     onTakePhoto = { onPhoto(node) },
                 )
             }
             if (children.isEmpty()) {
                 item {
                     Text(
-                        "Nothing in here yet. Tap “Add” to scan an item's QR code or add it by photo.",
+                        "No items yet. Press + to start adding.",
                         style = MaterialTheme.typography.bodyMedium,
                         textAlign = TextAlign.Center,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -967,9 +981,10 @@ private fun DetailScreen(
                         val (i, c) = store.countInside(child.id)
                         "Container · ${countText(i, c)}"
                     } else "Item"
+                    val photos = child.photoPaths.size
                     NodeRow(
                         node = child,
-                        detail = detail,
+                        detail = if (photos > 1) "$detail · $photos photos" else detail,
                         onClick = { onOpen(child) },
                         onRename = { onRename(child) },
                         onDelete = { onDelete(child) },
@@ -1290,22 +1305,47 @@ private fun EmptyState(title: String, hint: String, modifier: Modifier = Modifie
 
 @Composable
 private fun PhotoHeader(
-    photoPath: String?,
+    photoPaths: List<String>,
     emptyText: String,
-    onView: (String) -> Unit,
+    onView: (Int) -> Unit,
     onTakePhoto: () -> Unit,
 ) {
     val shape = RoundedCornerShape(14.dp)
-    if (photoPath != null) {
-        PhotoImage(
-            path = photoPath,
-            maxPx = 1200,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(200.dp)
-                .clip(shape)
-                .clickable { onView(photoPath) },
-        )
+    if (photoPaths.isNotEmpty()) {
+        if (photoPaths.size == 1) {
+            PhotoImage(
+                path = photoPaths[0],
+                maxPx = 1200,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(200.dp)
+                    .clip(shape)
+                    .clickable { onView(0) },
+            )
+        } else {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                itemsIndexed(photoPaths) { i, path ->
+                    PhotoImage(
+                        path = path,
+                        maxPx = 900,
+                        modifier = Modifier
+                            .width(260.dp)
+                            .height(200.dp)
+                            .clip(shape)
+                            .clickable { onView(i) },
+                    )
+                }
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (photoPaths.size == 1) "1 photo" else "${photoPaths.size} photos · swipe to see all",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f).padding(start = 4.dp),
+            )
+            TextButton(onClick = onTakePhoto) { Text("Add photo") }
+        }
     } else {
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -1354,9 +1394,10 @@ private fun NodeRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box {
-                if (node.photoPath != null) {
+                val mainPhoto = node.photoPath
+                if (mainPhoto != null) {
                     PhotoImage(
-                        path = node.photoPath,
+                        path = mainPhoto,
                         maxPx = 200,
                         modifier = Modifier
                             .size(56.dp)
@@ -1440,7 +1481,7 @@ private fun OverflowMenu(
                 DropdownMenuItem(text = { Text("Export to Excel") }, onClick = { open = false; onExport() })
             }
             DropdownMenuItem(
-                text = { Text(if (hasPhoto) "Retake photo" else "Take photo") },
+                text = { Text("Add photo") },
                 onClick = { open = false; onPhoto() },
             )
             DropdownMenuItem(text = { Text("Rename") }, onClick = { open = false; onRename() })
@@ -1452,20 +1493,18 @@ private fun OverflowMenu(
     }
 }
 
-/** Photo preview used inside the naming dialogs, with a take/retake button. */
+/**
+ * Photos of an entry that is being added: a row of thumbnails (tap to view, ✕ to remove)
+ * and a button to take another photo of the same thing.
+ */
 @Composable
-private fun DialogPhoto(photoPath: String?, onTakePhoto: () -> Unit) {
-    if (photoPath != null) {
-        PhotoImage(
-            path = photoPath,
-            maxPx = 800,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(160.dp)
-                .clip(RoundedCornerShape(12.dp)),
-        )
-        TextButton(onClick = onTakePhoto) { Text("Retake photo") }
-    } else {
+private fun DialogPhotos(
+    photoPaths: List<String>,
+    onTakePhoto: () -> Unit,
+    onRemove: (String) -> Unit,
+    onView: (Int) -> Unit,
+) {
+    if (photoPaths.isEmpty()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "No photo",
@@ -1475,6 +1514,43 @@ private fun DialogPhoto(photoPath: String?, onTakePhoto: () -> Unit) {
             )
             TextButton(onClick = onTakePhoto) { Text("Take photo") }
         }
+        return
+    }
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        itemsIndexed(photoPaths, key = { _, p -> p }) { i, path ->
+            Box {
+                PhotoImage(
+                    path = path,
+                    maxPx = 400,
+                    modifier = Modifier
+                        .size(if (photoPaths.size == 1) 150.dp else 104.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onView(i) },
+                )
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = Color.Black.copy(alpha = 0.55f),
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp)
+                        .size(28.dp)
+                        .clickable { onRemove(path) },
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(Icons.Filled.Close, contentDescription = "Remove photo", tint = Color.White, modifier = Modifier.size(18.dp))
+                    }
+                }
+            }
+        }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            if (photoPaths.size == 1) "1 photo" else "${photoPaths.size} photos",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onTakePhoto) { Text("Add another photo") }
     }
 }
 
@@ -1487,8 +1563,10 @@ private fun NameDialog(
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
     initial: String = "",
-    photoPath: String? = null,
+    photoPaths: List<String> = emptyList(),
     onTakePhoto: (() -> Unit)? = null,
+    onRemovePhoto: (String) -> Unit = {},
+    onViewPhoto: (Int) -> Unit = {},
 ) {
     var name by rememberSaveable { mutableStateOf(initial) }
     val focus = remember { FocusRequester() }
@@ -1499,7 +1577,7 @@ private fun NameDialog(
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 if (onTakePhoto != null) {
-                    DialogPhoto(photoPath, onTakePhoto)
+                    DialogPhotos(photoPaths, onTakePhoto, onRemovePhoto, onViewPhoto)
                     Spacer(Modifier.height(4.dp))
                 }
                 if (message != null) {
@@ -1535,8 +1613,10 @@ private fun NameDialog(
 private fun AddChildDialog(
     parentName: String,
     qr: String,
-    photoPath: String?,
+    photoPaths: List<String>,
     onTakePhoto: () -> Unit,
+    onRemovePhoto: (String) -> Unit,
+    onViewPhoto: (Int) -> Unit,
     onConfirm: (NodeType, String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1552,7 +1632,7 @@ private fun AddChildDialog(
         title = { Text("Add to “$parentName”") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                DialogPhoto(photoPath, onTakePhoto)
+                DialogPhotos(photoPaths, onTakePhoto, onRemovePhoto, onViewPhoto)
                 Text(
                     if (qr.isBlank()) "No QR code (added by photo)" else "QR code: $qr",
                     style = MaterialTheme.typography.bodySmall,
@@ -1615,7 +1695,7 @@ private fun ItemDialog(
     item: Node,
     location: String,
     onPhoto: () -> Unit,
-    onViewPhoto: (String) -> Unit,
+    onViewPhoto: (Int) -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
     onInfo: () -> Unit,
@@ -1626,18 +1706,42 @@ private fun ItemDialog(
         title = { Text(item.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                val photo = item.photoPath
-                if (photo != null) {
-                    PhotoImage(
-                        path = photo,
-                        maxPx = 1000,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(220.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable { onViewPhoto(photo) },
-                    )
-                    TextButton(onClick = onPhoto) { Text("Retake photo") }
+                val photos = item.photoPaths
+                if (photos.isNotEmpty()) {
+                    if (photos.size == 1) {
+                        PhotoImage(
+                            path = photos[0],
+                            maxPx = 1000,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(220.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { onViewPhoto(0) },
+                        )
+                    } else {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            itemsIndexed(photos) { i, path ->
+                                PhotoImage(
+                                    path = path,
+                                    maxPx = 800,
+                                    modifier = Modifier
+                                        .width(200.dp)
+                                        .height(220.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable { onViewPhoto(i) },
+                                )
+                            }
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (photos.size == 1) "1 photo" else "${photos.size} photos · swipe to see all",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = onPhoto) { Text("Add photo") }
+                    }
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -1680,6 +1784,7 @@ private fun InfoDialog(store: InventoryStore, node: Node, onDismiss: () -> Unit)
                     if (node.createdAt > 0) addedFormat.format(Date(node.createdAt)) else "Unknown",
                 )
                 InfoRow("Stored in", location.ifEmpty { "Top level" })
+                InfoRow("Photos", node.photoPaths.size.toString())
                 if (node.canHoldChildren) {
                     val (items, containers) = store.countInside(node.id)
                     InfoRow("Contains", countText(items, containers))
@@ -1706,31 +1811,68 @@ private fun InfoRow(label: String, value: String) {
     }
 }
 
+/** Full-screen photos: swipe left/right between them; optional delete for saved entries. */
 @Composable
-private fun PhotoViewer(path: String, onDismiss: () -> Unit) {
+private fun PhotoViewer(
+    paths: List<String>,
+    startIndex: Int,
+    onDelete: ((String) -> Unit)?,
+    onDismiss: () -> Unit,
+) {
+    val pager = rememberPagerState(initialPage = startIndex) { paths.size }
+    var confirmDelete by remember { mutableStateOf<String?>(null) }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(
             Modifier
                 .fillMaxSize()
-                .background(Color.Black)
-                .clickable(onClick = onDismiss),
-            contentAlignment = Alignment.Center,
+                .background(Color.Black),
         ) {
-            PhotoImage(
-                path = path,
-                maxPx = 2000,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Fit,
-            )
-            Text(
-                "Tap to close",
-                color = Color.White.copy(alpha = 0.7f),
-                style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier
+            HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), key = { paths.getOrElse(it) { "" } }) { page ->
+                PhotoImage(
+                    path = paths[page],
+                    maxPx = 2000,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable(onClick = onDismiss),
+                    contentScale = ContentScale.Fit,
+                )
+            }
+            Row(
+                Modifier
+                    .fillMaxWidth()
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 32.dp),
-            )
+                    .systemBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (onDelete != null) {
+                    TextButton(onClick = { confirmDelete = paths.getOrNull(pager.currentPage) }) {
+                        Text("Delete", color = Color(0xFFFFB4AB))
+                    }
+                } else Spacer(Modifier.width(72.dp))
+                Text(
+                    if (paths.size > 1) "${pager.currentPage + 1} / ${paths.size} · swipe" else "Tap to close",
+                    color = Color.White.copy(alpha = 0.8f),
+                    style = MaterialTheme.typography.labelLarge,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onDismiss) { Text("Close", color = Color.White) }
+            }
         }
+    }
+    confirmDelete?.let { path ->
+        AlertDialog(
+            onDismissRequest = { confirmDelete = null },
+            title = { Text("Delete this photo?") },
+            text = { Text("This can't be undone.") },
+            confirmButton = {
+                TextButton(onClick = { onDelete?.invoke(path); confirmDelete = null }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Cancel") } },
+        )
     }
 }
 
@@ -2032,7 +2174,7 @@ private fun SearchResultRow(store: InventoryStore, node: Node, score: Float?, on
 private fun photoPurpose(target: String): String = when (target.substringBefore(SEP)) {
     "S" -> "New storage"
     "C" -> "New item/container"
-    "N" -> "Replace photo"
+    "N" -> "Add photo to entry"
     "P" -> "Item added by photo"
     "T" -> "Temporary storage"
     "Q" -> "Search by photo"
