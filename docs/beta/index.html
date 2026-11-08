@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Storage Inventory</title>
+  <meta name="description" content="Track what's in every storage unit with QR codes and photos.">
+  <meta name="theme-color" content="#0D0E10">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Inventory">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- Camera: used for QR scanning and for taking photos -->
+  <div id="camera" class="camera" hidden>
+    <video id="camera-video" playsinline muted autoplay></video>
+    <canvas id="camera-finder" class="camera-finder"></canvas>
+    <div class="camera-top">
+      <button class="icon-btn light" id="camera-close" aria-label="Cancel"></button>
+      <h2 id="camera-title"></h2>
+      <p id="camera-subtitle"></p>
+    </div>
+    <div class="camera-bottom" id="camera-bottom">
+      <button class="btn ghost light" id="camera-skip">Skip photo</button>
+      <button class="shutter" id="camera-shutter" aria-label="Take photo"></button>
+      <span class="spacer"></span>
+    </div>
+    <p class="camera-error" id="camera-error" hidden></p>
+  </div>
+
+  <input type="file" id="file-photo" accept="image/*" capture="environment" hidden>
+  <input type="file" id="file-backup" accept="application/json,.json" hidden>
+
+  <div id="layer"></div>
+
+  <script src="vendor/jsQR.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
