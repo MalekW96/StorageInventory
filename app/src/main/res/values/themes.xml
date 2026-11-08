@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.StorageInventory" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#1F4E5F</item>
+        <item name="android:navigationBarColor">#FFFFFF</item>
+    </style>
+    <color name="ic_launcher_background">#1F4E5F</color>
+</resources>

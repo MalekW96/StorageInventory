@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A cardboard box with a small QR-style label, centred in the 66dp safe zone -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- box body -->
+    <path android:fillColor="#F2B35B" android:pathData="M32,46 L76,46 L76,76 L32,76 Z" />
+    <!-- lid -->
+    <path android:fillColor="#E09A3E" android:pathData="M29,36 L79,36 L79,47 L29,47 Z" />
+    <!-- tape -->
+    <path android:fillColor="#C98530" android:pathData="M50,36 L58,36 L58,52 L50,52 Z" />
+    <!-- label -->
+    <path android:fillColor="#FFFFFF" android:pathData="M45,56 L63,56 L63,72 L45,72 Z" />
+    <!-- QR squares -->
+    <path android:fillColor="#1F4E5F" android:pathData="M47,58 L52,58 L52,63 L47,63 Z M56,58 L61,58 L61,63 L56,63 Z M47,65 L52,65 L52,70 L47,70 Z M56,66 L58,66 L58,68 L56,68 Z M59,68 L61,68 L61,70 L59,70 Z" />
+</vector>
