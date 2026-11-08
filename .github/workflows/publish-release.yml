@@ -1,0 +1,33 @@
+name: Publish release
+
+# Runs when a new version is committed to the release/ folder: publishes
+# release/StorageInventory.apk and release/update.json as a GitHub release,
+# which is where the app's "Check for updates" looks.
+on:
+  push:
+    branches: [main]
+    paths: ['release/update.json', '.github/workflows/publish-release.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version
+        id: v
+        run: |
+          echo "name=$(jq -r .versionName release/update.json)" >> "$GITHUB_OUTPUT"
+          jq -r .notes release/update.json > notes.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.v.outputs.name }}
+          name: Storage Inventory ${{ steps.v.outputs.name }}
+          body_path: notes.txt
+          make_latest: true
+          files: |
+            release/StorageInventory.apk
+            release/update.json
