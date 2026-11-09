@@ -106,6 +106,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.Image
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.ImeAction
@@ -280,6 +284,60 @@ private val stackSaver = listSaver<SnapshotStateList<String>, String>(
 
 @Composable
 fun InventoryApp(store: InventoryStore) {
+    // Start screen for a moment each time the app opens, then the inventory.
+    var splash by rememberSaveable { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        delay(1200)
+        splash = false
+    }
+    Crossfade(targetState = splash, animationSpec = tween(400), label = "splash") { showSplash ->
+        if (showSplash) SplashScreen() else InventoryMain(store)
+    }
+}
+
+@Composable
+private fun SplashScreen() {
+    val context = LocalContext.current
+    val (code, name) = remember { Updater.installedVersion(context) }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Bg)
+            .systemBarsPadding(),
+    ) {
+        Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(
+                Modifier
+                    .size(96.dp)
+                    .shadow(24.dp, RoundedCornerShape(26.dp), ambientColor = Brass, spotColor = Brass)
+                    .clip(RoundedCornerShape(26.dp))
+                    .background(Surface1),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(painterResource(R.drawable.ic_box), contentDescription = null, tint = Brass, modifier = Modifier.size(56.dp))
+            }
+            Spacer(Modifier.height(22.dp))
+            Text("Storage Inventory", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, color = TextHi)
+            Spacer(Modifier.height(14.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(modifier = Modifier.size(13.dp), strokeWidth = 2.dp, color = Brass, trackColor = Brass.copy(alpha = 0.25f))
+                Spacer(Modifier.width(8.dp))
+                Text("Initializing", style = MaterialTheme.typography.bodySmall, color = TextMuted, letterSpacing = 0.5.sp)
+            }
+        }
+        Text(
+            "Version $name · Build $code",
+            style = MaterialTheme.typography.labelSmall,
+            color = TextFaint,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 22.dp),
+        )
+    }
+}
+
+@Composable
+private fun InventoryMain(store: InventoryStore) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -1028,7 +1086,10 @@ private fun HomeScreen(
             ) {
                 item {
                     val count = if (storages.size == 1) "1 bin" else "${storages.size} bins"
-                    SectionLabel(if (archivedView) "Archived · $count" else count)
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+                        Box(Modifier.weight(1f)) { SectionLabel(if (archivedView) "Archived · $count" else count) }
+                        SyncNote()
+                    }
                 }
                 items(storages, key = { it.id }) { storage ->
                     val (items, containers) = store.countInside(storage.id)
@@ -1433,6 +1494,28 @@ private fun SettingsCard(title: String, content: @Composable () -> Unit) {
     }
 }
 
+/** Home screen, right side: when the inventory last synced with the account. */
+@Composable
+private fun SyncNote() {
+    if (Cloud.userEmail == null) return
+    val last = Cloud.lastSync
+    val whenText = if (last > 0) SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.US).format(Date(last)) else null
+    val (dot, top, bottom) = when (Cloud.status) {
+        Cloud.Status.SYNCED -> Triple(Color(0xFF5BC27A), if (whenText != null) "Last successful sync" else "Synced", whenText)
+        Cloud.Status.SYNCING, Cloud.Status.CONNECTING -> Triple(Brass, "Syncing…", whenText?.let { "Last successful sync $it" })
+        Cloud.Status.ERROR -> Triple(Danger, "Last sync failed", whenText?.let { "Last successful sync $it" })
+        else -> Triple(TextFaint, if (whenText != null) "Last sync" else "Not synced yet", whenText)
+    }
+    Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(end = 4.dp, bottom = 2.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(6.dp).clip(CircleShape).background(dot))
+            Spacer(Modifier.width(5.dp))
+            Text(top, style = MaterialTheme.typography.labelSmall, color = if (Cloud.status == Cloud.Status.ERROR) Danger else TextFaint)
+        }
+        if (bottom != null) Text(bottom, style = MaterialTheme.typography.labelSmall, color = TextMuted, fontWeight = FontWeight.Medium)
+    }
+}
+
 /** Sign in / sync status at the top of Settings. */
 @Composable
 private fun AccountCard() {
@@ -1452,8 +1535,14 @@ private fun AccountCard() {
                 color = TextMuted,
             )
             Spacer(Modifier.height(12.dp))
-            Button(
-                onClick = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Google: just the "G"
+            Box(
+                Modifier
+                    .size(46.dp)
+                    .clip(CircleShape)
+                    .background(if (googleBusy) Color.White.copy(alpha = 0.6f) else Color.White)
+                    .clickable(enabled = !googleBusy) {
                     error = null
                     googleBusy = true
                     scope.launch {
@@ -1466,14 +1555,22 @@ private fun AccountCard() {
                         googleBusy = false
                     }
                 },
-                enabled = !googleBusy,
-                colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color(0xFF1F1F1F)),
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text(if (googleBusy) "Opening Google…" else "Continue with Google", fontWeight = FontWeight.SemiBold) }
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { error = null; emailMode = "signin" }, modifier = Modifier.weight(1f)) { Text("Sign in with email") }
-                OutlinedButton(onClick = { error = null; emailMode = "create" }, modifier = Modifier.weight(1f)) { Text("Create account") }
+                contentAlignment = Alignment.Center,
+            ) {
+                if (googleBusy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color(0xFF4285F4))
+                else Image(painterResource(R.drawable.ic_google), contentDescription = "Sign in with Google", modifier = Modifier.size(22.dp))
+            }
+            Button(
+                onClick = { error = null; emailMode = "signin" },
+                colors = ButtonDefaults.buttonColors(containerColor = Brass, contentColor = BrassInk),
+                contentPadding = PaddingValues(horizontal = 10.dp),
+                modifier = Modifier.weight(0.8f).height(46.dp),
+            ) { Text("Sign in", fontWeight = FontWeight.SemiBold, maxLines = 1) }
+            OutlinedButton(
+                onClick = { error = null; emailMode = "create" },
+                contentPadding = PaddingValues(horizontal = 10.dp),
+                modifier = Modifier.weight(1.2f).height(46.dp),
+            ) { Text("Create new account", maxLines = 1, overflow = TextOverflow.Ellipsis) }
             }
             error?.let {
                 Spacer(Modifier.height(8.dp))
@@ -1557,7 +1654,7 @@ private fun EmailSignInDialog(create: Boolean, onDismiss: () -> Unit) {
 
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
-        title = { Text(if (create) "Create account" else "Sign in with email") },
+        title = { Text(if (create) "Create new account" else "Sign in") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(

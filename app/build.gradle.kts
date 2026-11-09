@@ -15,8 +15,8 @@ android {
         applicationId = "com.malek.storageinventory"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "2.3.1.1"
+        versionCode = 14
+        versionName = "2.4.0.0"
     }
 
     buildTypes {

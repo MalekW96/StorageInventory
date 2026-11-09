@@ -2,8 +2,8 @@
  * Everything is stored on the device (IndexedDB). No account, no server. */
 'use strict';
 
-const APP_VERSION = '2.3.1.1';
-const APP_BUILD = 1; // bumped for updates published under the same version number
+const APP_VERSION = '2.4.0.0';
+const APP_BUILD = 14; // same build number as the Android app // bumped for updates published under the same version number
 
 // ===========================================================================
 // Small helpers
@@ -879,7 +879,7 @@ function renderHome() {
     const hint = sel ? (arch ? 'Tap bins to tick them, then ☰ › Unarchive' : 'Tap bins to tick them, then ☰ › Archive')
       : arch ? 'Archived bins can’t be opened. Press and hold (or tap) a bin to select it, then ☰ › Unarchive'
       : 'Press and hold a bin to select it · swipe left for options';
-    body = `<div class="label">${arch ? 'Archived · ' : ''}${plural(storages.length, 'bin')}</div><div class="list">${storages.map((s) =>
+    body = `<div class="label-row"><div class="label">${arch ? 'Archived · ' : ''}${plural(storages.length, 'bin')}</div>${syncNoteHtml()}</div><div class="list">${storages.map((s) =>
       nodeRow(s, countText(Store.countInside(s.id)), { tag: s.qr ? null : 'Temporary', select: sel ? (state.selected.has(s.id) ? 'on' : 'off') : null })).join('')}</div>` +
       `<p class="swipe-hint">${esc(hint)}</p>`;
   }
@@ -996,7 +996,7 @@ function renderSettings() {
     ${accountCard()}
     <div class="card" style="padding:16px">
       <div class="name" style="font-weight:600;font-size:17px">App updates</div>
-      <p>Installed version: ${APP_VERSION} (web)</p>
+      <p>Installed version: ${APP_VERSION} · build ${APP_BUILD} (web)</p>
       ${updateHtml}
       ${u.status !== 'available' ? `<button class="btn outline" data-act="check-update" ${u.status === 'checking' ? 'disabled' : ''}>Check for updates</button>` : ''}
     </div>
@@ -1831,12 +1831,23 @@ window.addEventListener('resize', () => { if (!Camera.el.hidden) Camera.drawFind
 // ===========================================================================
 // Start
 // ===========================================================================
+function hideSplash(shownAt) {
+  const el = document.getElementById('splash');
+  if (!el) return;
+  const wait = Math.max(0, 1100 - (performance.now() - shownAt));
+  setTimeout(() => { el.classList.add('gone'); setTimeout(() => el.remove(), 450); }, wait);
+}
+
 (async function start() {
+  const splashAt = performance.now();
+  const sv = document.getElementById('splash-version');
+  if (sv) sv.textContent = `Version ${APP_VERSION} · Build ${APP_BUILD}`;
   Camera.init();
   try {
     await DB.open();
     await Store.load();
   } catch (e) {
+    hideSplash(0);
     $('#app').innerHTML = `<div class="empty"><h2>Can't open storage</h2><p>${esc(e.message || e)}. If you're in a Private tab, open the app in a normal Safari tab.</p></div>`;
     return;
   }
@@ -1844,6 +1855,7 @@ window.addEventListener('resize', () => { if (!Camera.el.hidden) Camera.drawFind
   Log.add('App opened', `Version ${APP_VERSION} (web) · ${standalone ? 'Home Screen app' : 'browser'} · ${navigator.userAgent}`);
   Log.trim().catch(() => {});
   render();
+  hideSplash(splashAt);
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if ('serviceWorker' in navigator) {
     try { swReg = await navigator.serviceWorker.register('sw.js'); } catch (e) { console.warn('SW failed', e); }
@@ -1956,7 +1968,7 @@ function base64ToBlob(b64) {
 }
 
 const Sync = {
-  fb: null, user: null, status: 'off', message: '', lastSync: 0, unsub: null, loading: null,
+  fb: null, user: null, status: 'off', message: '', lastSync: Number(lsGet('cloudLastSync')) || 0, unsub: null, loading: null,
   fetching: new Set(),
 
   load() {
@@ -1992,12 +2004,13 @@ const Sync = {
   setStatus(status, message = '') {
     this.status = status; this.message = message;
     if (state.screen === 'settings') scheduleRender();
+    else if (state.screen === 'home' && !state.selecting && syncNoteHtml() !== lastSyncNote) scheduleRender();
   },
 
   async onUser(u) {
     if (this.unsub) { this.unsub(); this.unsub = null; }
     this.user = u || null;
-    if (!u) { lsSet('cloudUser', null); this.setStatus('off'); return; }
+    if (!u) { lsSet('cloudUser', null); lsSet('cloudLastSync', null); this.lastSync = 0; this.setStatus('off'); return; }
     const last = lsGet('cloudLastUid');
     lsSet('cloudUser', u.uid);
     lsSet('cloudLastUid', u.uid);
@@ -2028,7 +2041,10 @@ const Sync = {
           merged = true;
           await this.pushLocal(snap.docs.map((d) => d.data()));
         }
-        if (!snap.metadata.hasPendingWrites && !snap.metadata.fromCache) this.lastSync = Date.now();
+        if (!snap.metadata.hasPendingWrites && !snap.metadata.fromCache) {
+          this.lastSync = Date.now();
+          lsSet('cloudLastSync', String(this.lastSync));
+        }
         this.setStatus(snap.metadata.hasPendingWrites ? 'syncing' : snap.metadata.fromCache ? (merged ? 'synced' : 'offline') : 'synced');
       } catch (e) {
         Log.add('Sync error', e.message || String(e));
@@ -2223,7 +2239,7 @@ const Account = {
   emailDialog(mode) {
     const create = mode === 'create';
     const close = dialog({
-      title: create ? 'Create account' : 'Sign in with email',
+      title: create ? 'Create new account' : 'Sign in',
       body: `<p class="small-muted">${create ? 'Use any email address. Your inventory will sync to every device you sign in on.' : 'Use the email and password of your Storage Inventory account.'}</p>
         <label class="field"><span>Email</span><input id="a-email" type="email" autocomplete="email" autocapitalize="off" inputmode="email"></label>
         <label class="field"><span>Password</span><input id="a-pass" type="password" autocomplete="${create ? 'new-password' : 'current-password'}"></label>
@@ -2310,9 +2326,11 @@ function accountCard() {
       <p class="hint">Sign in to keep your bins, items and photos in sync across your phone, tablet and computer.</p>
       ${connecting ? '<p class="hint">Connecting…</p>' : ''}
       ${Sync.status === 'offline' ? `<p class="hint">${esc(Sync.message)}</p>` : ''}
-      <button class="btn google-btn" data-act="acct-google"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M22.5 12.3c0-.8-.1-1.5-.2-2.2H12v4.2h5.9a5 5 0 0 1-2.2 3.3v2.7h3.5c2.1-1.9 3.3-4.7 3.3-8z"/><path fill="#34A853" d="M12 23c3 0 5.4-1 7.2-2.7l-3.5-2.7c-1 .7-2.2 1.1-3.7 1.1-2.9 0-5.3-1.9-6.2-4.5H2.2v2.8A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.8 14.2a6.6 6.6 0 0 1 0-4.3V7.1H2.2a11 11 0 0 0 0 9.9z"/><path fill="#EA4335" d="M12 5.4c1.6 0 3.1.6 4.2 1.7l3.2-3.2A11 11 0 0 0 2.2 7.1l3.6 2.8C6.7 7.3 9.1 5.4 12 5.4z"/></svg>Continue with Google</button>
-      <div class="btn-row"><button class="btn outline" data-act="acct-email">Sign in with email</button>
-        <button class="btn outline" data-act="acct-create">Create account</button></div>
+      <div class="signin-row">
+      <button class="g-btn" data-act="acct-google" aria-label="Sign in with Google" title="Sign in with Google"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M22.5 12.3c0-.8-.1-1.5-.2-2.2H12v4.2h5.9a5 5 0 0 1-2.2 3.3v2.7h3.5c2.1-1.9 3.3-4.7 3.3-8z"/><path fill="#34A853" d="M12 23c3 0 5.4-1 7.2-2.7l-3.5-2.7c-1 .7-2.2 1.1-3.7 1.1-2.9 0-5.3-1.9-6.2-4.5H2.2v2.8A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.8 14.2a6.6 6.6 0 0 1 0-4.3V7.1H2.2a11 11 0 0 0 0 9.9z"/><path fill="#EA4335" d="M12 5.4c1.6 0 3.1.6 4.2 1.7l3.2-3.2A11 11 0 0 0 2.2 7.1l3.6 2.8C6.7 7.3 9.1 5.4 12 5.4z"/></svg></button>
+      <button class="btn brass" data-act="acct-email">Sign in</button>
+      <button class="btn outline" data-act="acct-create">Create new account</button>
+      </div>
     </div>`;
   }
   const st = Sync.status;
@@ -2328,4 +2346,24 @@ function accountCard() {
     <div class="btn-row"><button class="btn outline" data-act="acct-sync">Sync now</button>
       <button class="btn outline" data-act="acct-signout">Sign out</button></div>
   </div>`;
+}
+
+/** Small note on the home screen: when the inventory last synced with the account. */
+let lastSyncNote = '';
+function fmtDateTime(t) {
+  const d = new Date(t), p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function syncNoteHtml() {
+  let html = '';
+  if (Sync.user || lsGet('cloudUser')) {
+    const when = Sync.lastSync ? fmtDateTime(Sync.lastSync) : '';
+    const st = Sync.status;
+    if (st === 'synced' && when) html = `<div class="sync-note ok"><span class="sync-dot ok"></span>Last successful sync<br><b>${when}</b></div>`;
+    else if (st === 'syncing' || st === 'connecting') html = `<div class="sync-note"><span class="sync-dot busy"></span>Syncing…${when ? `<br>Last successful sync ${when}` : ''}</div>`;
+    else if (st === 'error') html = `<div class="sync-note err"><span class="sync-dot err"></span>Last sync failed${when ? `<br>Last successful sync ${when}` : ''}</div>`;
+    else html = `<div class="sync-note"><span class="sync-dot off"></span>${when ? `Last sync<br><b>${when}</b>` : 'Not synced yet'}</div>`;
+  }
+  lastSyncNote = html;
+  return html;
 }

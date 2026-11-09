@@ -317,3 +317,31 @@ button { cursor: pointer; }
 .sync-dot.off { background: var(--faint); }
 .sync-dot.err { background: var(--danger); }
 @keyframes pulse { from { opacity: .35; } to { opacity: 1; } }
+
+/* Start screen */
+#splash { position: fixed; inset: 0; z-index: 200; background: var(--bg); display: flex; flex-direction: column;
+  align-items: center; justify-content: center; transition: opacity .4s ease; padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom); }
+#splash.gone { opacity: 0; pointer-events: none; }
+#splash .splash-logo { width: 96px; height: 96px; border-radius: 26px; background: var(--surface); display: grid; place-items: center;
+  box-shadow: 0 18px 50px rgba(201, 163, 93, 0.16); }
+#splash .splash-logo svg { width: 58px; height: 58px; }
+#splash h1 { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; margin: 22px 0 0; color: var(--text); }
+#splash .splash-init { display: flex; align-items: center; gap: 8px; margin-top: 14px; color: var(--muted); font-size: 13px; letter-spacing: 0.04em; }
+#splash .spinner { width: 13px; height: 13px; border-radius: 50%; border: 2px solid rgba(201, 163, 93, 0.25); border-top-color: var(--brass);
+  animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+#splash .splash-version { position: absolute; bottom: calc(22px + env(safe-area-inset-bottom)); color: var(--faint, #6A6E75); font-size: 12px; }
+
+/* Home: last sync note on the right of the bin count */
+.label-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin: 8px 4px 2px; }
+.label-row .label { margin: 0; }
+.sync-note { text-align: right; font-size: 11.5px; line-height: 1.35; color: var(--faint, #6A6E75); }
+.sync-note b { color: var(--muted); font-weight: 500; }
+.sync-note .sync-dot { display: inline-block; width: 6px; height: 6px; margin-right: 5px; vertical-align: 1px; }
+.sync-note.err { color: var(--danger); }
+
+/* Compact sign-in row: G · Sign in · Create new account */
+.signin-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.signin-row .btn { flex: 1; white-space: nowrap; padding-left: 10px; padding-right: 10px; }
+.g-btn { width: 46px; height: 46px; flex: none; border-radius: 50%; border: 0; background: #fff; display: grid; place-items: center; cursor: pointer; }
+.g-btn svg { width: 22px; height: 22px; }

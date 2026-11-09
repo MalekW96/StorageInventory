@@ -117,6 +117,7 @@ object Cloud {
             message = "Sync unavailable: ${e.message}"
             return
         }
+        lastSync = prefs.getLong("lastSync", 0L)
         store.onLocalChange = { n -> pushNode(n) }
         store.onLocalDelete = { id, t, photos -> writeDelete(id, t, photos.map { store.photoId(it) }) }
         store.onPhotoRemoved = { p -> deletePhoto(store.photoId(p)) }
@@ -131,6 +132,8 @@ object Cloud {
         uid = u?.uid
         if (u == null) {
             userEmail = null; provider = ""; status = Status.OFF; message = ""
+            lastSync = 0L
+            prefs.edit().remove("lastSync").apply()
             return
         }
         userEmail = u.email ?: u.displayName ?: "your account"
@@ -236,7 +239,10 @@ object Cloud {
                 merged = true
                 pushLocal(snap.documents)
             }
-            if (!snap.metadata.hasPendingWrites() && !snap.metadata.isFromCache) lastSync = System.currentTimeMillis()
+            if (!snap.metadata.hasPendingWrites() && !snap.metadata.isFromCache) {
+                lastSync = System.currentTimeMillis()
+                prefs.edit().putLong("lastSync", lastSync).apply()
+            }
             status = when {
                 snap.metadata.hasPendingWrites() -> Status.SYNCING
                 snap.metadata.isFromCache && !merged -> Status.OFFLINE

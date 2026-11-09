@@ -1,6 +1,6 @@
 {
-  "versionCode": 13,
-  "versionName": "2.3.1.1",
-  "apkUrl": "https://github.com/MalekW96/StorageInventory/releases/download/v2.3.1.1/StorageInventory.apk",
-  "notes": "Accounts and sync: in Settings, sign in with Google or create an account with email and password. Your bins, items and photos then stay in sync across your phone, iPhone and computer. Signing in is optional; without it everything stays on this device like before."
+  "versionCode": 14,
+  "versionName": "2.4.0.0",
+  "apkUrl": "https://github.com/MalekW96/StorageInventory/releases/download/v2.4.0.0/StorageInventory.apk",
+  "notes": "New start screen while the app loads (with version and build). The main page now shows when your inventory last synced successfully, on the right above your bins. Sign-in is simpler: a G button for Google, Sign in, and Create new account."
 }

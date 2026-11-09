@@ -16,6 +16,13 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <!-- Start screen, shown until the app has loaded -->
+  <div id="splash" role="status" aria-label="Initializing">
+    <div class="splash-logo"><svg viewBox="0 0 24 24" fill="none" stroke="#C9A35D" stroke-width="1.5" stroke-linejoin="round"><path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5z"/><path d="M3.5 7.5 12 12l8.5-4.5M12 12v9"/></svg></div>
+    <h1>Storage Inventory</h1>
+    <div class="splash-init"><span class="spinner"></span>Initializing</div>
+    <div class="splash-version" id="splash-version"></div>
+  </div>
   <div id="app"></div>
 
   <!-- Camera: used for QR scanning and for taking photos -->

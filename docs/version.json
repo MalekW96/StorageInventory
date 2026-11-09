@@ -1,5 +1,5 @@
 {
-  "version": "2.3.1.1",
-  "build": 1,
-  "notes": "Accounts and sync: in Settings, sign in with Google or create an account with email and password. Your bins, items and photos then stay in sync across your phone, iPhone and computer. Signing in is optional; without it everything stays on this device like before."
+  "version": "2.4.0.0",
+  "build": 14,
+  "notes": "New start screen while the app loads (with version and build). The main page now shows when your inventory last synced successfully, on the right above your bins. Sign-in is simpler: a G button for Google, Sign in, and Create new account."
 }
