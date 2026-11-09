@@ -879,7 +879,8 @@ function renderHome() {
     const hint = sel ? (arch ? 'Tap bins to tick them, then ☰ › Unarchive' : 'Tap bins to tick them, then ☰ › Archive')
       : arch ? 'Archived bins can’t be opened. Press and hold (or tap) a bin to select it, then ☰ › Unarchive'
       : 'Press and hold a bin to select it · swipe left for options';
-    body = `<div class="label-row"><div class="label">${arch ? 'Archived · ' : ''}${plural(storages.length, 'bin')}</div>${syncNoteHtml()}</div><div class="list">${storages.map((s) =>
+    lastSyncNote = syncNoteHtml();
+    body = `<div class="label-row"><div class="label">${arch ? 'Archived · ' : ''}${plural(storages.length, 'bin')}</div>${lastSyncNote}</div><div class="list">${storages.map((s) =>
       nodeRow(s, countText(Store.countInside(s.id)), { tag: s.qr ? null : 'Temporary', select: sel ? (state.selected.has(s.id) ? 'on' : 'off') : null })).join('')}</div>` +
       `<p class="swipe-hint">${esc(hint)}</p>`;
   }
@@ -2364,6 +2365,5 @@ function syncNoteHtml() {
     else if (st === 'error') html = `<div class="sync-note err"><span class="sync-dot err"></span>Last sync failed${when ? `<br>Last successful sync ${when}` : ''}</div>`;
     else html = `<div class="sync-note"><span class="sync-dot off"></span>${when ? `Last sync<br><b>${when}</b>` : 'Not synced yet'}</div>`;
   }
-  lastSyncNote = html;
   return html;
 }
