@@ -2,8 +2,8 @@
  * Everything is stored on the device (IndexedDB). No account, no server. */
 'use strict';
 
-const APP_VERSION = '2.4.0.0';
-const APP_BUILD = 14; // same build number as the Android app // bumped for updates published under the same version number
+const APP_VERSION = '2.5.0.0';
+const APP_BUILD = 15; // same build number as the Android app // bumped for updates published under the same version number
 
 // ===========================================================================
 // Small helpers
@@ -17,7 +17,8 @@ const fmtDate = (ms) => {
   const d = new Date(ms);
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 };
-const typeLabel = (n) => n.type === 'STORAGE' ? (n.qr ? 'Storage' : 'Temporary storage') : n.type === 'CONTAINER' ? 'Container' : 'Item';
+const isTemporary = (n) => n.type === 'STORAGE' && !n.qr && !n.permanent;
+const typeLabel = (n) => n.type === 'STORAGE' ? (isTemporary(n) ? 'Temporary storage' : 'Storage') : n.type === 'CONTAINER' ? 'Container' : 'Item';
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const countText = ({ items, containers }) =>
   containers ? `${plural(items, 'item')} · ${plural(containers, 'container')}` : plural(items, 'item');
@@ -49,6 +50,7 @@ const ICON = {
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 12.5 4 4 8-9"/></svg>',
   unarchive: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M3 4.5h18v4H3zM4.5 8.5v11h15v-11M12 17v-5.5M9.5 14l2.5-2.5 2.5 2.5"/></svg>',
   selectIcon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12.3 2.7 2.7L16 9.5"/></svg>',
+  tagIcon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7l8.3 8.3a1.4 1.4 0 0 1 0 2l-6.2 6.2a1.4 1.4 0 0 1-2 0z"/><circle cx="8" cy="8" r="1.4"/></svg>',
   clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
 };
 
@@ -147,6 +149,37 @@ const Store = {
       .sort((a, b) => (a.type === 'ITEM') - (b.type === 'ITEM') || a.name.localeCompare(b.name));
   },
   findByQr(qr) { return qr ? this.nodes.find((n) => n.qr === qr) || null : null; },
+  /** The main bin an entry belongs to. */
+  rootOf(id) { return this.path(id)[0] || null; },
+  descendants(id) {
+    const out = [], queue = [id];
+    while (queue.length) { const p = queue.shift(); for (const n of this.nodes) if (n.parentId === p) { out.push(n); queue.push(n.id); } }
+    return out;
+  },
+  /** Categories (labels) defined for the main bin that holds this entry. */
+  categoriesFor(id) { const r = this.rootOf(id); return r && Array.isArray(r.categories) ? r.categories : []; },
+  async addCategory(id, name) {
+    const r = this.rootOf(id); name = (name || '').trim();
+    if (!r || !name) return;
+    const cats = this.categoriesFor(id);
+    if (cats.some((c) => c.toLowerCase() === name.toLowerCase())) return;
+    await this.update(r.id, { categories: [...cats, name] });
+    Log.add('Category added', `“${name}” in “${r.name}”`);
+  },
+  async renameCategory(id, from, to) {
+    const r = this.rootOf(id); to = (to || '').trim();
+    if (!r || !to || from === to) return;
+    await this.update(r.id, { categories: this.categoriesFor(id).map((c) => (c === from ? to : c)) });
+    for (const n of this.descendants(r.id)) if (n.category === from) await this.update(n.id, { category: to });
+    Log.add('Category renamed', `“${from}” → “${to}” in “${r.name}”`);
+  },
+  async deleteCategory(id, name) {
+    const r = this.rootOf(id);
+    if (!r) return;
+    await this.update(r.id, { categories: this.categoriesFor(id).filter((c) => c !== name) });
+    for (const n of this.descendants(r.id)) if (n.category === name) await this.update(n.id, { category: null });
+    Log.add('Category deleted', `“${name}” in “${r.name}”`);
+  },
   path(id) {
     const out = [];
     let n = this.get(id), guard = 0;
@@ -165,9 +198,10 @@ const Store = {
     }
     return { items, containers };
   },
-  async add({ qr = '', name, type, parentId = null, photoIds = [] }) {
+  async add({ qr = '', name, type, parentId = null, photoIds = [], category = null }) {
     const now = Date.now();
     const node = { id: uid(), qr, name: name.trim(), type, parentId, createdAt: now, updatedAt: now, photoIds: [...photoIds] };
+    if (category) node.category = category;
     this.nodes.push(node);
     await DB.put('nodes', node);
     Sync.pushNode(node);
@@ -639,10 +673,13 @@ function photoStrip(ids, { removable = false, big = false } = {}) {
  * Name (and optionally type) dialog for a new entry, with photo preview and retake.
  * Resolves { name, type, photoId } or null when cancelled (the photo is then deleted).
  */
-function entryDialog({ title, message, label = 'Name', confirm = 'Done', photoIds = [], needType = false, photoTitle, initial = '' }) {
+function entryDialog({ title, message, label = 'Name', confirm = 'Done', photoIds = [], needType = false, photoTitle, initial = '', categoryOf = null }) {
   return new Promise((resolve) => {
     let photos = [...photoIds];
     let type = null;
+    // Categories of the main bin this entry goes into (null = not asked)
+    const cats = categoryOf ? [...Store.categoriesFor(categoryOf)] : null;
+    let category = null;
     const photoHtml = () => photos.length
       ? photoStrip(photos, { removable: true }) +
         `<div class="no-photo" style="padding:0"><span>${photos.length === 1 ? '1 photo' : photos.length + ' photos'}</span><button class="btn text" id="d-retake">Add another photo</button></div>`
@@ -654,7 +691,9 @@ function entryDialog({ title, message, label = 'Name', confirm = 'Done', photoId
         <p style="margin:12px 0 0;font-weight:600">What is this?</p>
         <label class="choice"><input type="radio" name="d-type" value="ITEM"><span>Item<small>A single thing you're storing</small></span></label>
         <label class="choice"><input type="radio" name="d-type" value="CONTAINER"><span>Smaller container<small>A box or bin that holds more items</small></span></label>` : ''}
-      <label class="field"><span id="d-label">${esc(label)}</span><input id="d-name" autocomplete="off" autocapitalize="sentences" enterkeyhint="done" value="${esc(initial)}"></label>`;
+      <label class="field"><span id="d-label">${esc(label)}</span><input id="d-name" autocomplete="off" autocapitalize="sentences" enterkeyhint="done" value="${esc(initial)}"></label>
+      ${cats ? `<p style="margin:14px 0 6px;font-weight:600">Category</p><div class="chips" id="d-cats"></div>
+        <div class="newcat" id="d-newcat" hidden><input id="d-catname" placeholder="New category" autocomplete="off" autocapitalize="sentences" enterkeyhint="done"><button class="btn text" id="d-catadd">Add</button></div>` : ''}`;
     let close;
     const done = (value) => { close(); resolve(value); };
     const update = (scrim) => {
@@ -665,7 +704,7 @@ function entryDialog({ title, message, label = 'Name', confirm = 'Done', photoId
       title, body, dismissable: false,
       actions: [
         { label: 'Cancel', onClick: () => { photos.forEach((p) => Photos.remove(p)); done(null); } },
-        { label: confirm, id: 'd-ok', onClick: () => done({ name: $('#d-name').value.trim(), type, photoIds: photos }) },
+        { label: confirm, id: 'd-ok', onClick: () => done({ name: $('#d-name').value.trim(), type, photoIds: photos, category, newCategories: cats ? cats.filter((c) => !Store.categoriesFor(categoryOf).includes(c)) : [] }) },
       ],
       onOpen: (scrim) => {
         const refresh = () => { $('#d-photo', scrim).innerHTML = photoHtml(); hydratePhotos(scrim); wire(); };
@@ -689,6 +728,27 @@ function entryDialog({ title, message, label = 'Name', confirm = 'Done', photoId
           $('#d-label', scrim).textContent = type === 'CONTAINER' ? 'Container name' : 'Item name';
           update(scrim);
         });
+        if (cats) {
+          const drawCats = () => {
+            $('#d-cats', scrim).innerHTML = [`<button class="chip${category === null ? ' on' : ''}" data-cat="">None</button>`]
+              .concat(cats.map((c) => `<button class="chip${category === c ? ' on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`))
+              .concat(['<button class="chip add" data-cat-new>+ New</button>']).join('');
+            scrim.querySelectorAll('[data-cat]').forEach((b) => b.onclick = () => { category = b.dataset.cat || null; drawCats(); });
+            $('[data-cat-new]', scrim).onclick = () => { $('#d-newcat', scrim).hidden = false; $('#d-catname', scrim).focus(); };
+          };
+          const addCat = () => {
+            const v = $('#d-catname', scrim).value.trim();
+            if (!v) return;
+            const existing = cats.find((c) => c.toLowerCase() === v.toLowerCase());
+            if (!existing) cats.push(v);
+            category = existing || v;
+            $('#d-catname', scrim).value = ''; $('#d-newcat', scrim).hidden = true;
+            drawCats();
+          };
+          $('#d-catadd', scrim).onclick = addCat;
+          $('#d-catname', scrim).onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); addCat(); } };
+          drawCats();
+        }
         const input = $('#d-name', scrim);
         input.oninput = () => update(scrim);
         input.onkeydown = (e) => { if (e.key === 'Enter' && !$('#d-ok', scrim).disabled) $('#d-ok', scrim).click(); };
@@ -798,14 +858,14 @@ function nextBinName() {
   return `Bin ${String(max + 1).padStart(3, '0')}`;
 }
 
-function nodeRow(node, detail, { score, tag, select } = {}) {
+function nodeRow(node, detail, { score, tag, select, cat } = {}) {
   const thumb = mainPhoto(node)
     ? `<img class="thumb" data-photo="${esc(mainPhoto(node))}" alt="">`
     : badge(node);
   const tick = select ? `<button class="check${select === 'on' ? ' on' : ''}" data-select="${esc(node.id)}" aria-label="Select ${esc(node.name)}">${ICON.check}</button>` : '';
   const row = `<div class="row clickable${select ? ' has-check' : ''}" data-open="${esc(node.id)}">
     ${tick}${thumb}
-    <div class="main"><div class="name">${esc(node.name)}</div><div class="detail">${tag ? `<span class="tag">${esc(tag)}</span>` : ''}${esc(detail)}</div></div>
+    <div class="main"><div class="name">${esc(node.name)}</div><div class="detail">${tag ? `<span class="tag">${esc(tag)}</span>` : ''}${cat ? `<span class="tag cat">${esc(cat)}</span>` : ''}${esc(detail)}</div></div>
     ${score != null ? `<span class="score">${Math.round(score * 100)}%</span>`
       : `<span class="chev">${ICON.chev}</span>`}
   </div>`;
@@ -881,7 +941,7 @@ function renderHome() {
       : 'Press and hold a bin to select it · swipe left for options';
     lastSyncNote = syncNoteHtml();
     body = `<div class="label-row"><div class="label">${arch ? 'Archived · ' : ''}${plural(storages.length, 'bin')}</div>${lastSyncNote}</div><div class="list">${storages.map((s) =>
-      nodeRow(s, countText(Store.countInside(s.id)), { tag: s.qr ? null : 'Temporary', select: sel ? (state.selected.has(s.id) ? 'on' : 'off') : null })).join('')}</div>` +
+      nodeRow(s, countText(Store.countInside(s.id)), { tag: isTemporary(s) ? 'Temporary' : null, select: sel ? (state.selected.has(s.id) ? 'on' : 'off') : null })).join('')}</div>` +
       `<p class="swipe-hint">${esc(hint)}</p>`;
   }
   const title = sel ? (state.selected.size ? `${state.selected.size} selected` : 'Select bins') : arch ? 'Archived storage' : 'Storage Inventory';
@@ -907,18 +967,32 @@ function renderDetail() {
          <button class="btn text" data-act="photo-node" data-id="${esc(node.id)}">Add photo</button></div>`
     : `<div class="card no-photo"><span>No photo of this ${esc(typeLabel(node).toLowerCase())} yet</span>
          <button class="btn text" data-act="photo-node" data-id="${esc(node.id)}">Take photo</button></div>`;
+  const cats = Store.categoriesFor(node.id);
+  let filter = state.catFilter && state.catFilter.node === node.id ? state.catFilter.name : null;
+  if (filter && !cats.includes(filter)) filter = null;
+  const catBar = `<div class="cat-bar"><div class="label" style="margin:0">Categories</div><div class="chips">` +
+    (cats.length ? [`<button class="chip${filter ? '' : ' on'}" data-act="cat-filter" data-name="">All</button>`]
+      .concat(cats.map((c) => {
+        const count = kids.filter((k) => k.category === c).length;
+        return `<button class="chip${filter === c ? ' on' : ''}" data-act="cat-filter" data-name="${esc(c)}">${esc(c)}${count ? ` <small>${count}</small>` : ''}</button>`;
+      })).join('') : '') +
+    `<button class="chip add" data-act="cat-new" data-id="${esc(node.id)}">+ Category</button>` +
+    (cats.length ? `<button class="chip add" data-act="cat-edit" data-id="${esc(node.id)}">Edit</button>` : '') + `</div></div>`;
+  const shown = filter ? kids.filter((k) => k.category === filter) : kids;
   let list;
   if (!kids.length) {
     list = `<p class="hint" style="text-align:center;padding:32px 16px">No items yet. Press + to start adding.</p>`;
+  } else if (!shown.length) {
+    list = `<p class="hint" style="text-align:center;padding:24px 16px">Nothing here is in “${esc(filter)}” yet.</p>`;
   } else {
-    list = `<div class="label">Inside · ${esc(countText(Store.countInside(node.id)))}</div>` +
-      kids.map((c) => nodeRow(c, (canHold(c) ? `Container · ${countText(Store.countInside(c.id))}` : 'Item') +
-        (photoCount(c) > 1 ? ` · ${photoCount(c)} photos` : ''))).join('') + SWIPE_HINT;
+    list = `<div class="label">${filter ? `${esc(filter)} · ${plural(shown.length, 'entry')}` : `Inside · ${esc(countText(Store.countInside(node.id)))}`}</div>` +
+      shown.map((c) => nodeRow(c, (canHold(c) ? `Container · ${countText(Store.countInside(c.id))}` : 'Item') +
+        (photoCount(c) > 1 ? ` · ${photoCount(c)} photos` : ''), { cat: c.category })).join('') + SWIPE_HINT;
   }
   return topbar({
     title: node.name, crumbs, backBtn: true,
     actions: `<button class="icon-btn round" data-menu="${esc(node.id)}" aria-label="Options">${ICON.dots}</button>`,
-  }) + `<main class="content"><div class="list">${header}${list}</div></main>
+  }) + `<main class="content"><div class="list">${header}${catBar}${list}</div></main>
     <button class="fab" data-act="detail-add">${ICON.plus}Add item</button>`;
 }
 
@@ -927,10 +1001,11 @@ function searchResultsHtml() {
   const q = s.query.trim().toLowerCase();
   let results = '';
   if (q) {
-    const hits = Store.nodes.filter((n) => n.name.toLowerCase().includes(q) || (n.qr && n.qr.toLowerCase().includes(q)))
+    const hits = Store.nodes.filter((n) => n.name.toLowerCase().includes(q) || (n.qr && n.qr.toLowerCase().includes(q)) ||
+        (n.category && n.category.toLowerCase().includes(q)))
       .sort((a, b) => a.name.localeCompare(b.name));
     results = `<div class="label">${hits.length} result${hits.length === 1 ? '' : 's'} for “${esc(s.query.trim())}”</div>` +
-      hits.map((n) => nodeRow(n, `${typeLabel(n)} · ${Store.location(n.id) || 'Top level'}${Store.isArchived(n.id) ? ' · Archived' : ''}`)).join('');
+      hits.map((n) => nodeRow(n, `${typeLabel(n)} · ${Store.location(n.id) || 'Top level'}${Store.isArchived(n.id) ? ' · Archived' : ''}`, { cat: n.category })).join('');
   } else if (s.photoUrl) {
     results = `<div class="row" style="padding-left:0"><img class="thumb" src="${s.photoUrl}" alt="" style="width:72px;height:72px">
       <div class="main"><div class="name">Your photo</div><button class="btn text" data-act="clear-photo" style="padding-left:0">Clear</button></div></div>`;
@@ -948,7 +1023,7 @@ function searchResultsHtml() {
     }
     if (s.note) results += `<p class="small-muted">${esc(s.note)}</p>`;
   } else {
-    results = `<p class="hint">Type a name, take a photo to find similar-looking things you've stored, or scan a QR code.</p>`;
+    results = `<p class="hint">Type a name or category, take a photo to find similar-looking things you've stored, or scan a QR code.</p>`;
   }
   return results;
 }
@@ -1056,7 +1131,8 @@ function infoDialog(node) {
   const close = dialog({
     title: 'Info',
     body: archivedNote(node) + row('Name', node.name) + row('Type', typeLabel(node)) + row('Added', fmtDate(node.createdAt)) +
-      row('Stored in', Store.location(node.id) || 'Top level') + row('Photos', String(photoCount(node))) +
+      row('Stored in', Store.location(node.id) || 'Top level') + (node.parentId ? row('Category', node.category || 'None') : '') +
+      (!node.parentId && (node.categories || []).length ? row('Categories', node.categories.join(', ')) : '') + row('Photos', String(photoCount(node))) +
       (canHold(node) ? row('Contains', countText(Store.countInside(node.id))) : '') +
       row('QR code', node.qr || 'None yet (swipe left › More › Assign QR code)'),
     actions: [{ label: 'Close', onClick: () => close() }],
@@ -1092,6 +1168,8 @@ function nodeMenu(anchor, node) {
       { icon: ICON.info, label: 'Info', note: 'Date added, location, QR code', onClick: () => infoDialog(node) },
       node.archived ? null : { icon: ICON.camera, label: 'Add photo', onClick: () => flowAddPhoto(node) },
       !node.qr && !node.archived ? { icon: ICON.qr, label: 'Assign QR code', onClick: () => flowAssignQr(node) } : null,
+      isTemporary(node) ? { icon: ICON.box, label: 'Make permanent', note: 'Keep it as a regular bin (QR code optional)', onClick: () => flowMakePermanent([node.id]) } : null,
+      node.parentId ? { icon: ICON.tagIcon, label: 'Category', note: node.category || 'None', onClick: () => flowSetCategory(node) } : null,
       canHold(node) ? { icon: ICON.sheet, label: 'Export to Excel', onClick: () => exportStorageExcel(node) } : null,
       { icon: ICON.pencil, label: 'Rename', onClick: () => flowRename(node) },
       { icon: ICON.trash, label: 'Delete', danger: true, onClick: () => flowDelete(node) },
@@ -1127,6 +1205,119 @@ async function flowNewStorage() {
   if (!res) return;
   const storage = await Store.add({ qr, name: res.name, type: 'STORAGE', photoIds: res.photoIds });
   openNode(storage);
+}
+
+async function flowMakePermanent(ids) {
+  const bins = ids.map((id) => Store.get(id)).filter((n) => n && isTemporary(n));
+  if (!bins.length) return;
+  for (const b of bins) { await Store.update(b.id, { permanent: true }); Log.add('Made permanent', `“${b.name}”`); }
+  endSelect(false);
+  render();
+  toast(bins.length === 1 ? `“${bins[0].name}” is now a permanent bin` : `${bins.length} bins are now permanent`);
+}
+
+/** Choose (or create) the category of one entry. Resolves { chosen, cats } or undefined. */
+function categoryPicker(node) {
+  return new Promise((resolve) => {
+    const cats = [...Store.categoriesFor(node.id)];
+    let chosen = node.category || null;
+    const close = dialog({
+      title: 'Category', onDismiss: () => resolve(undefined),
+      body: `<p class="small-muted">For “${esc(node.name)}”. Categories belong to the bin “${esc((Store.rootOf(node.id) || node).name)}”.</p>
+        <div class="chips" id="p-cats"></div>
+        <div class="newcat"><input id="p-new" placeholder="New category" autocomplete="off" autocapitalize="sentences" enterkeyhint="done"><button class="btn text" id="p-add">Add</button></div>`,
+      actions: [
+        { label: 'Cancel', onClick: () => { close(); resolve(undefined); } },
+        { label: 'Save', onClick: () => { close(); resolve({ chosen, cats }); } },
+      ],
+      onOpen: (scrim) => {
+        const draw = () => {
+          $('#p-cats', scrim).innerHTML = [`<button class="chip${chosen === null ? ' on' : ''}" data-c="">None</button>`]
+            .concat(cats.map((c) => `<button class="chip${chosen === c ? ' on' : ''}" data-c="${esc(c)}">${esc(c)}</button>`)).join('');
+          scrim.querySelectorAll('[data-c]').forEach((b) => b.onclick = () => { chosen = b.dataset.c || null; draw(); });
+        };
+        const add = () => {
+          const v = $('#p-new', scrim).value.trim();
+          if (!v) return;
+          const ex = cats.find((c) => c.toLowerCase() === v.toLowerCase());
+          if (!ex) cats.push(v);
+          chosen = ex || v;
+          $('#p-new', scrim).value = '';
+          draw();
+        };
+        $('#p-add', scrim).onclick = add;
+        $('#p-new', scrim).onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } };
+        draw();
+      },
+    });
+  });
+}
+
+async function flowSetCategory(node) {
+  const res = await categoryPicker(node);
+  if (!res) return;
+  for (const c of res.cats) if (!Store.categoriesFor(node.id).includes(c)) await Store.addCategory(node.id, c);
+  if ((node.category || null) !== res.chosen) {
+    await Store.update(node.id, { category: res.chosen });
+    Log.add('Category set', `“${node.name}” → ${res.chosen ? '“' + res.chosen + '”' : 'none'}`);
+  }
+  render();
+}
+
+async function flowNewCategory(id) {
+  const name = await promptText({ title: 'New category', label: 'Category name', confirm: 'Add' });
+  if (!name) return;
+  await Store.addCategory(id, name);
+  render();
+}
+
+function flowEditCategories(id) {
+  const root = Store.rootOf(id);
+  const cats = Store.categoriesFor(id);
+  if (!root || !cats.length) return;
+  const count = (c) => Store.descendants(root.id).filter((n) => n.category === c).length;
+  const close = dialog({
+    title: 'Categories',
+    body: `<p class="small-muted">Categories of “${esc(root.name)}”. Deleting one keeps the items, just without that label.</p>
+      <div class="cat-edit">${cats.map((c) => `<div class="cat-line"><span>${esc(c)} <small>${plural(count(c), 'entry')}</small></span>
+        <button class="btn text" data-ren="${esc(c)}">Rename</button><button class="btn text danger" data-del="${esc(c)}">Delete</button></div>`).join('')}</div>`,
+    actions: [{ label: 'Done', onClick: () => close() }],
+    onOpen: (scrim) => {
+      scrim.querySelectorAll('[data-ren]').forEach((b) => b.onclick = async () => {
+        close();
+        const to = await promptText({ title: 'Rename category', label: 'Category name', confirm: 'Save', initial: b.dataset.ren });
+        if (to) await Store.renameCategory(id, b.dataset.ren, to);
+        render();
+        flowEditCategories(id);
+      });
+      scrim.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
+        close();
+        const ok = await confirmDialog({ title: `Delete “${b.dataset.del}”?`, text: 'Items keep their place; they just lose this category.', ok: 'Delete', cancel: 'Cancel' });
+        if (ok) await Store.deleteCategory(id, b.dataset.del);
+        render();
+        if (Store.categoriesFor(id).length) flowEditCategories(id);
+      });
+    },
+  });
+}
+
+/** Simple one-line text prompt. Resolves the text or null. */
+function promptText({ title, label = 'Name', confirm = 'Done', initial = '' }) {
+  return new Promise((resolve) => {
+    const close = dialog({
+      title, onDismiss: () => resolve(null),
+      body: `<label class="field"><span>${esc(label)}</span><input id="t-in" autocomplete="off" autocapitalize="sentences" enterkeyhint="done" value="${esc(initial)}"></label>`,
+      actions: [
+        { label: 'Cancel', onClick: () => { close(); resolve(null); } },
+        { label: confirm, id: 't-ok', onClick: () => { const v = $('#t-in').value.trim(); close(); resolve(v || null); } },
+      ],
+      onOpen: (scrim) => {
+        const i = $('#t-in', scrim);
+        setTimeout(() => { i.focus(); i.select(); }, 50);
+        i.onkeydown = (e) => { if (e.key === 'Enter') $('#t-ok', scrim).click(); };
+      },
+    });
+  });
 }
 
 async function flowArchiveSelected(toArchive) {
@@ -1165,10 +1356,11 @@ async function flowAddChildByQr(parentId) {
     if (!shot) return;
     const res = await entryDialog({
       title: `Add to “${parent.name}”`, message: `QR code: ${qr}`, needType: true,
-      photoIds: shot.photoId ? [shot.photoId] : [], photoTitle: 'Another photo of the item(s)',
+      photoIds: shot.photoId ? [shot.photoId] : [], photoTitle: 'Another photo of the item(s)', categoryOf: parentId,
     });
     if (!res) return;
-    await Store.add({ qr, name: res.name, type: res.type, parentId, photoIds: res.photoIds });
+    for (const c of res.newCategories) await Store.addCategory(parentId, c);
+    await Store.add({ qr, name: res.name, type: res.type, parentId, photoIds: res.photoIds, category: res.category });
     render();
     const again = await confirmDialog({
       title: `Added “${res.name}”`, text: `Scan the next QR code to keep adding to “${parent.name}”?`,
@@ -1215,10 +1407,11 @@ async function flowAddByPhoto(targetId = null) {
   if (!target) { await Photos.remove(shot.photoId); return; }
   const res = await entryDialog({
     title: `Add to “${target.name}”`, message: 'No QR code (added by photo)', needType: true,
-    photoIds: [shot.photoId], photoTitle: 'Another photo of the item',
+    photoIds: [shot.photoId], photoTitle: 'Another photo of the item', categoryOf: target.id,
   });
   if (!res) return;
-  await Store.add({ qr: '', name: res.name, type: res.type, parentId: target.id, photoIds: res.photoIds });
+  for (const c of res.newCategories) await Store.addCategory(target.id, c);
+  await Store.add({ qr: '', name: res.name, type: res.type, parentId: target.id, photoIds: res.photoIds, category: res.category });
   openNode(target);
   toast(`Added “${res.name}”`);
 }
@@ -1664,7 +1857,7 @@ function storageWorkbook(root) {
     for (const child of Store.children(parent.id)) {
       rows.push([
         rows.length + 1, child.name, typeLabel(child), Store.location(child.id), parent.name, level,
-        child.qr || '(none)', fmtDate(child.createdAt), photoCount(child),
+        child.category || '', child.qr || '(none)', fmtDate(child.createdAt), photoCount(child),
         canHold(child) ? countText(Store.countInside(child.id)) : '',
       ]);
       if (canHold(child)) walk(child, level + 1);
@@ -1673,8 +1866,8 @@ function storageWorkbook(root) {
   walk(root, 1);
   const c = Store.countInside(root.id);
   return [
-    { name: 'Contents', header: ['#', 'Name', 'Type', 'Location', 'Directly inside', 'Level', 'QR code', 'Added', 'Photos', 'Contents'],
-      rows, widths: [6, 30, 18, 40, 24, 7, 22, 21, 8, 26] },
+    { name: 'Contents', header: ['#', 'Name', 'Type', 'Location', 'Directly inside', 'Level', 'Category', 'QR code', 'Added', 'Photos', 'Contents'],
+      rows, widths: [6, 30, 18, 40, 24, 7, 18, 22, 21, 8, 26] },
     { name: 'Summary', header: ['Field', 'Value'], widths: [20, 50], rows: [
       ['Name', root.name], ['Type', typeLabel(root)], ['Location', Store.location(root.id) || 'Top level'],
       ['QR code', root.qr || '(none)'], ['Added', fmtDate(root.createdAt)],
@@ -1770,6 +1963,9 @@ document.addEventListener('click', (e) => {
   else if (a === 'search') go('search');
   else if (a === 'settings') { state.updateCheck = null; go('settings'); }
   else if (a === 'cancel-select') endSelect();
+  else if (a === 'cat-filter') { state.catFilter = { node: state.stack[state.stack.length - 1], name: act.dataset.name || null }; render(); }
+  else if (a === 'cat-new') flowNewCategory(act.dataset.id);
+  else if (a === 'cat-edit') flowEditCategories(act.dataset.id);
   else if (a === 'main-menu') {
     const arch = state.archived, n = state.selected.size, sel = state.selecting;
     const binsHere = Store.storages(arch);
@@ -1777,6 +1973,9 @@ document.addEventListener('click', (e) => {
       sel ? { icon: arch ? ICON.unarchive : ICON.archive,
         label: arch ? (n ? `Unarchive ${plural(n, 'bin')}` : 'Unarchive') : (n ? `Archive ${plural(n, 'bin')}` : 'Archive'),
         disabled: !n, onClick: () => flowArchiveSelected(!arch) } : null,
+      sel && !arch && [...state.selected].some((id) => { const b = Store.get(id); return b && isTemporary(b); })
+        ? { icon: ICON.box, label: `Make permanent (${[...state.selected].filter((id) => { const b = Store.get(id); return b && isTemporary(b); }).length})`,
+          onClick: () => flowMakePermanent([...state.selected]) } : null,
       sel ? (n < binsHere.length
         ? { label: 'Select all', icon: ICON.selectIcon, onClick: () => { binsHere.forEach((b) => state.selected.add(b.id)); render(); } }
         : { label: 'Clear selection', icon: ICON.selectIcon, onClick: () => { state.selected.clear(); render(); } }) : null,
@@ -2074,6 +2273,7 @@ const Sync = {
       const node = {
         id: r.id, qr: r.qr || '', name: r.name || '', type: r.type || 'ITEM', parentId: r.parentId || null,
         createdAt: r.createdAt || rt, updatedAt: rt, photoIds: Array.isArray(r.photoIds) ? r.photoIds : [], archived: !!r.archived,
+        category: r.category || null, categories: Array.isArray(r.categories) ? r.categories : [], permanent: !!r.permanent,
       };
       const dropped = local ? photosOf(local).filter((p) => !node.photoIds.includes(p)) : [];
       if (local) Object.assign(local, node); else Store.nodes.push(node);
@@ -2109,6 +2309,7 @@ const Sync = {
     const data = {
       id: n.id, qr: n.qr || '', name: n.name, type: n.type, parentId: n.parentId || null,
       createdAt: n.createdAt || 0, updatedAt: n.updatedAt || Date.now(), photoIds: photosOf(n), archived: !!n.archived, deleted: false,
+      category: n.category || null, categories: Array.isArray(n.categories) ? n.categories : [], permanent: !!n.permanent,
     };
     try {
       F.setDoc(this.ref('nodes', n.id), data).catch((e) => this.fail(e));

@@ -278,6 +278,9 @@ object Cloud {
             photoPaths = photoIds.map { store.photoPath(it) },
             archived = d.getBoolean("archived") == true,
             updatedAt = rt,
+            permanent = d.getBoolean("permanent") == true,
+            category = d.getString("category")?.takeIf { it.isNotBlank() },
+            categories = (d.get("categories") as? List<*>)?.mapNotNull { it as? String } ?: emptyList(),
         )
         store.applyRemote(node)
         photoIds.forEach { ensurePhoto(it) }
@@ -305,6 +308,7 @@ object Cloud {
             "id" to n.id, "qr" to n.qr, "name" to n.name, "type" to n.type.name, "parentId" to n.parentId,
             "createdAt" to n.createdAt, "updatedAt" to n.updatedAt, "photoIds" to photoIds,
             "archived" to n.archived, "deleted" to false,
+            "category" to n.category, "categories" to n.categories, "permanent" to n.permanent,
         )
         nodes().document(n.id).set(data).addOnFailureListener { fail(it) }
         photoIds.forEach { uploadPhoto(it) }

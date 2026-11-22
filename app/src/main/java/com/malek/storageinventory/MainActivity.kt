@@ -106,6 +106,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.Image
 import androidx.compose.animation.core.tween
@@ -371,6 +373,7 @@ private fun InventoryMain(store: InventoryStore) {
     var message by remember { mutableStateOf<String?>(null) }
     var infoFor by remember { mutableStateOf<String?>(null) }
     var optionsFor by remember { mutableStateOf<String?>(null) }
+    var categoryFor by remember { mutableStateOf<String?>(null) }
     var showNewBin by remember { mutableStateOf(false) }
     var addItemFor by remember { mutableStateOf<String?>(null) }
 
@@ -565,6 +568,12 @@ private fun InventoryMain(store: InventoryStore) {
                 onCancelSelect = { endSelect() },
                 onSelectAll = { ids -> ids.forEach { if (it !in selected) selected.add(it) } },
                 onClearSelection = { selected.clear() },
+                onMakePermanent = { ids ->
+                    val temps = ids.mapNotNull { store.get(it) }.filter { it.isTemporary }
+                    temps.forEach { store.setPermanent(it.id) }
+                    message = if (temps.size == 1) "“${temps[0].name}” is now a permanent bin." else "${temps.size} bins are now permanent."
+                    endSelect()
+                },
                 onArchiveSelected = { ids, toArchive ->
                     ids.forEach { store.setArchived(it, toArchive) }
                     val what = if (ids.size == 1) "“${store.get(ids[0])?.name}”" else "${ids.size} bins"
@@ -690,6 +699,7 @@ private fun InventoryMain(store: InventoryStore) {
             AddChildDialog(
                 parentName = target.name,
                 qr = "",
+                categories = store.categoriesFor(target.id),
                 photoPaths = photoItems,
                 onTakePhoto = { takePhoto("P") },
                 onRemovePhoto = { path ->
@@ -699,8 +709,9 @@ private fun InventoryMain(store: InventoryStore) {
                     if (left.isEmpty()) photoItemTarget = null
                 },
                 onViewPhoto = { i -> viewer = ViewerState(photoItems, i, null) },
-                onConfirm = { type, name ->
-                    store.add("", name, type, target.id, photoItems)
+                onConfirm = { type, name, category, newCategories ->
+                    newCategories.forEach { store.addCategory(target.id, it) }
+                    store.add("", name, type, target.id, photoItems, category)
                     photoItemRaw = null
                     photoItemTarget = null
                     openNode(target)
@@ -751,12 +762,14 @@ private fun InventoryMain(store: InventoryStore) {
             AddChildDialog(
                 parentName = parent.name,
                 qr = pendingChild.qr,
+                categories = store.categoriesFor(parent.id),
                 photoPaths = pendingChild.photos,
                 onTakePhoto = { takePhoto("C$SEP${parent.id}$SEP${pendingChild.qr}") },
                 onRemovePhoto = { pendingChildRaw = removePendingPhoto(pendingChildRaw, it) },
                 onViewPhoto = { i -> viewer = ViewerState(pendingChild.photos, i, null) },
-                onConfirm = { type, name ->
-                    store.add(pendingChild.qr, name, type, parent.id, pendingChild.photos)
+                onConfirm = { type, name, category, newCategories ->
+                    newCategories.forEach { store.addCategory(parent.id, it) }
+                    store.add(pendingChild.qr, name, type, parent.id, pendingChild.photos, category)
                     pendingChildRaw = null
                     askAnother = parent.id to name.trim()
                 },
@@ -845,6 +858,10 @@ private fun InventoryMain(store: InventoryStore) {
             onDismiss = { addItemFor = null },
         )
     }
+    categoryFor?.let { id ->
+        val node = store.get(id)
+        if (node == null) categoryFor = null else CategoryPickerDialog(store, node, onDismiss = { categoryFor = null })
+    }
     optionsFor?.let { id ->
         val node = store.get(id)
         LaunchedEffect(id) { node?.let { ActivityLog.log("Opened options", "“${it.name}”") } }
@@ -859,6 +876,11 @@ private fun InventoryMain(store: InventoryStore) {
                     SheetAction(R.drawable.ic_info, "Info", "Date added, location, QR code") { infoFor = node.id },
                     if (!node.archived) SheetAction(R.drawable.ic_camera, "Add photo") { takePhoto("N$SEP${node.id}") } else null,
                     if (!node.hasQr && !node.archived) SheetAction(R.drawable.ic_qr, "Assign QR code") { scanMode = ScanMode.AssignQr(node.id) } else null,
+                    if (node.isTemporary) SheetAction(R.drawable.ic_box, "Make permanent", "Keep it as a regular bin (QR code optional)") {
+                        store.setPermanent(node.id)
+                        message = "“${node.name}” is now a permanent bin."
+                    } else null,
+                    if (node.parentId != null) SheetAction(R.drawable.ic_tag, "Category", node.category ?: "None") { categoryFor = node.id } else null,
                     if (node.canHoldChildren) SheetAction(R.drawable.ic_table, "Export to Excel") { exportStorage(node) } else null,
                     SheetAction(R.drawable.ic_pencil, "Rename") { renaming = node },
                     SheetAction(R.drawable.ic_trash, "Delete", danger = true) { deleting = node },
@@ -1001,6 +1023,7 @@ private fun HomeScreen(
     onSelectAll: (List<String>) -> Unit,
     onClearSelection: () -> Unit,
     onArchiveSelected: (List<String>, Boolean) -> Unit,
+    onMakePermanent: (List<String>) -> Unit,
     onOpen: (Node) -> Unit,
     onOptions: (Node) -> Unit,
     onDelete: (Node) -> Unit,
@@ -1042,6 +1065,8 @@ private fun HomeScreen(
                         allSelected = chosen.size == storages.size,
                         canSelect = storages.isNotEmpty(),
                         onArchiveSelected = { onArchiveSelected(chosen, !archivedView) },
+                        temporarySelected = if (archivedView) 0 else chosen.count { id -> storages.firstOrNull { it.id == id }?.isTemporary == true },
+                        onMakePermanent = { onMakePermanent(chosen) },
                         onStartSelect = onStartSelect,
                         onSelectAll = { onSelectAll(storages.map { it.id }) },
                         onClearSelection = onClearSelection,
@@ -1136,6 +1161,9 @@ private fun DetailScreen(
 ) {
     val children = store.children(node.id)
     val path = store.path(node.id)
+    var catFilter by rememberSaveable(node.id) { mutableStateOf<String?>(null) }
+    if (catFilter != null && catFilter !in store.categoriesFor(node.id)) catFilter = null
+    val shown = catFilter?.let { f -> children.filter { it.category == f } } ?: children
     Scaffold(
         containerColor = Bg,
         topBar = {
@@ -1192,6 +1220,7 @@ private fun DetailScreen(
                     onTakePhoto = { onPhoto(node) },
                 )
             }
+            item { CategoryBar(store, node, children, catFilter) { catFilter = it } }
             if (children.isEmpty()) {
                 item {
                     Text(
@@ -1204,12 +1233,24 @@ private fun DetailScreen(
                             .padding(horizontal = 16.dp, vertical = 32.dp),
                     )
                 }
+            } else if (shown.isEmpty()) {
+                item {
+                    Text(
+                        "Nothing here is in “$catFilter” yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                        color = TextMuted,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 24.dp),
+                    )
+                }
             } else {
                 item {
                     val (items, containers) = store.countInside(node.id)
-                    SectionLabel("Inside · ${countText(items, containers)}")
+                    SectionLabel(catFilter?.let { "$it · ${if (shown.size == 1) "1 entry" else "${shown.size} entries"}" } ?: "Inside · ${countText(items, containers)}")
                 }
-                items(children, key = { it.id }) { child ->
+                items(shown, key = { it.id }) { child ->
                     val detail = if (child.canHoldChildren) {
                         val (i, c) = store.countInside(child.id)
                         "Container · ${countText(i, c)}"
@@ -1218,6 +1259,7 @@ private fun DetailScreen(
                     NodeRow(
                         node = child,
                         detail = if (photos > 1) "$detail · $photos photos" else detail,
+                        cat = child.category,
                         onClick = { onOpen(child) },
                         onMore = { onOptions(child) },
                         onDelete = { onDelete(child) },
@@ -1492,6 +1534,220 @@ private fun SettingsCard(title: String, content: @Composable () -> Unit) {
             content()
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Categories (labels inside a main bin)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun CatChip(text: String, selected: Boolean, outlined: Boolean = false, count: Int? = null, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(50)
+    Row(
+        Modifier
+            .clip(shape)
+            .then(
+                when {
+                    selected -> Modifier.background(Brass)
+                    outlined -> Modifier.border(1.dp, Brass.copy(alpha = 0.45f), shape)
+                    else -> Modifier.background(Surface2)
+                }
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 13.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text,
+            color = when { selected -> BrassInk; outlined -> Brass; else -> TextHi },
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        if (count != null && count > 0) {
+            Spacer(Modifier.width(4.dp))
+            Text("$count", color = if (selected) BrassInk.copy(alpha = 0.7f) else TextMuted, style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+/** Chips to pick a category (or none), with a field to add a new one. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CategoryChooser(categories: List<String>, selected: String?, onSelect: (String?) -> Unit, onAdd: (String) -> Unit) {
+    var adding by rememberSaveable { mutableStateOf(false) }
+    var newName by rememberSaveable { mutableStateOf("") }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        CatChip("None", selected = selected == null) { onSelect(null) }
+        categories.forEach { c -> CatChip(c, selected = selected == c) { onSelect(c) } }
+        if (!adding) CatChip("+ New", selected = false, outlined = true) { adding = true }
+    }
+    if (adding) {
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = newName,
+                onValueChange = { newName = it },
+                label = { Text("New category") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = {
+                    if (newName.isNotBlank()) { onAdd(newName.trim()); newName = ""; adding = false }
+                }),
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = {
+                if (newName.isNotBlank()) { onAdd(newName.trim()); newName = ""; adding = false }
+            }) { Text("Add") }
+        }
+    }
+}
+
+/** Change the category of one item or container. */
+@Composable
+private fun CategoryPickerDialog(store: InventoryStore, node: Node, onDismiss: () -> Unit) {
+    val original = remember(node.id) { store.categoriesFor(node.id) }
+    var cats by remember(node.id) { mutableStateOf(original) }
+    var chosen by remember(node.id) { mutableStateOf(node.category) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Category") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    "For “${node.name}”. Categories belong to the bin “${store.rootOf(node.id)?.name ?: node.name}”.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextMuted,
+                )
+                Spacer(Modifier.height(10.dp))
+                CategoryChooser(
+                    categories = cats,
+                    selected = chosen,
+                    onSelect = { chosen = it },
+                    onAdd = { new ->
+                        val existing = cats.firstOrNull { it.equals(new, ignoreCase = true) }
+                        if (existing == null) cats = cats + new
+                        chosen = existing ?: new
+                    },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                (cats - original.toSet()).forEach { store.addCategory(node.id, it) }
+                store.setCategory(node.id, chosen)
+                onDismiss()
+            }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** One-line text prompt (new / rename category). */
+@Composable
+private fun TextPromptDialog(title: String, label: String, confirm: String, initial: String = "", onDone: (String) -> Unit, onDismiss: () -> Unit) {
+    var text by remember { mutableStateOf(TextFieldValue(initial, TextRange(0, initial.length))) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                label = { Text(label) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { if (text.text.isNotBlank()) onDone(text.text.trim()) }),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focus),
+            )
+        },
+        confirmButton = { TextButton(onClick = { onDone(text.text.trim()) }, enabled = text.text.isNotBlank()) { Text(confirm) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** Rename or delete the categories of a main bin. */
+@Composable
+private fun EditCategoriesDialog(store: InventoryStore, binId: String, onDismiss: () -> Unit) {
+    val root = store.rootOf(binId) ?: return
+    val cats = store.categoriesFor(binId)
+    var renaming by remember { mutableStateOf<String?>(null) }
+    var deleting by remember { mutableStateOf<String?>(null) }
+    val inside = store.descendants(root.id)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Categories") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    "Categories of “${root.name}”. Deleting one keeps the items, just without that label.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextMuted,
+                )
+                Spacer(Modifier.height(8.dp))
+                if (cats.isEmpty()) Text("No categories yet.", color = TextMuted)
+                cats.forEach { c ->
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.weight(1f)) {
+                            Text(c, style = MaterialTheme.typography.bodyLarge)
+                            val n = inside.count { it.category == c }
+                            Text(if (n == 1) "1 entry" else "$n entries", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                        }
+                        TextButton(onClick = { renaming = c }) { Text("Rename") }
+                        TextButton(onClick = { deleting = c }) { Text("Delete", color = Danger) }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+    )
+    renaming?.let { c ->
+        TextPromptDialog(
+            title = "Rename category", label = "Category name", confirm = "Save", initial = c,
+            onDone = { store.renameCategory(binId, c, it); renaming = null },
+            onDismiss = { renaming = null },
+        )
+    }
+    deleting?.let { c ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete “$c”?") },
+            text = { Text("Items keep their place; they just lose this category.") },
+            confirmButton = { TextButton(onClick = { store.deleteCategory(binId, c); deleting = null }) { Text("Delete", color = Danger) } },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+/** Category chips at the top of a bin: filter the list, add or edit categories. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CategoryBar(store: InventoryStore, node: Node, children: List<Node>, filter: String?, onFilter: (String?) -> Unit) {
+    val cats = store.categoriesFor(node.id)
+    var adding by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf(false) }
+    Column(Modifier.padding(top = 6.dp)) {
+        SectionLabel("Categories")
+        Spacer(Modifier.height(6.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (cats.isNotEmpty()) {
+                CatChip("All", selected = filter == null) { onFilter(null) }
+                cats.forEach { c -> CatChip(c, selected = filter == c, count = children.count { it.category == c }) { onFilter(c) } }
+            }
+            CatChip("+ Category", selected = false, outlined = true) { adding = true }
+            if (cats.isNotEmpty()) CatChip("Edit", selected = false, outlined = true) { editing = true }
+        }
+    }
+    if (adding) {
+        TextPromptDialog(
+            title = "New category", label = "Category name", confirm = "Add",
+            onDone = { store.addCategory(node.id, it); adding = false },
+            onDismiss = { adding = false },
+        )
+    }
+    if (editing) EditCategoriesDialog(store, node.id, onDismiss = { editing = false })
 }
 
 /** Home screen, right side: when the inventory last synced with the account. */
@@ -1830,6 +2086,7 @@ private fun NodeRow(
     node: Node,
     detail: String,
     tag: String? = null,
+    cat: String? = null,
     selectState: Boolean? = null,
     onSelect: () -> Unit = {},
     swipeEnabled: Boolean = true,
@@ -1877,6 +2134,10 @@ private fun NodeRow(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (tag != null) {
                         Tag(tag)
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    if (cat != null) {
+                        Tag(cat, neutral = true)
                         Spacer(Modifier.width(6.dp))
                     }
                     Text(detail, style = MaterialTheme.typography.bodyMedium, color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -2026,15 +2287,15 @@ private fun TypeBadge(@Suppress("UNUSED_PARAMETER") type: NodeType, small: Boole
 }
 
 @Composable
-private fun Tag(text: String) {
+private fun Tag(text: String, neutral: Boolean = false) {
     Text(
         text.uppercase(),
-        color = Brass,
+        color = if (neutral) TextHi else Brass,
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.SemiBold,
         modifier = Modifier
             .clip(RoundedCornerShape(6.dp))
-            .background(Brass.copy(alpha = 0.12f))
+            .background(if (neutral) Color.White.copy(alpha = 0.07f) else Brass.copy(alpha = 0.12f))
             .padding(horizontal = 6.dp, vertical = 2.dp),
     )
 }
@@ -2091,6 +2352,8 @@ private fun MainMenu(
     allSelected: Boolean,
     canSelect: Boolean,
     onArchiveSelected: () -> Unit,
+    temporarySelected: Int,
+    onMakePermanent: () -> Unit,
     onStartSelect: () -> Unit,
     onSelectAll: () -> Unit,
     onClearSelection: () -> Unit,
@@ -2116,6 +2379,7 @@ private fun MainMenu(
                     else (if (selectedCount > 0) "Archive $bins" else "Archive"),
                     null, current = null, enabled = selectedCount > 0,
                 ) { open = false; onArchiveSelected() }
+                if (temporarySelected > 0) MainMenuItem(R.drawable.ic_box, "Make permanent ($temporarySelected)", null, current = null) { open = false; onMakePermanent() }
                 if (allSelected) MainMenuItem(R.drawable.ic_select, "Clear selection", null, current = null) { open = false; onClearSelection() }
                 else MainMenuItem(R.drawable.ic_select, "Select all", null, current = null) { open = false; onSelectAll() }
                 MainMenuItem(R.drawable.ic_close, "Cancel selection", null, current = null) { open = false; onCancelSelect() }
@@ -2394,13 +2658,16 @@ private fun NameDialog(
 private fun AddChildDialog(
     parentName: String,
     qr: String,
+    categories: List<String>,
     photoPaths: List<String>,
     onTakePhoto: () -> Unit,
     onRemovePhoto: (String) -> Unit,
     onViewPhoto: (Int) -> Unit,
-    onConfirm: (NodeType, String) -> Unit,
+    onConfirm: (type: NodeType, name: String, category: String?, newCategories: List<String>) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var cats by rememberSaveable { mutableStateOf(categories) }
+    var category by rememberSaveable { mutableStateOf<String?>(null) }
     var typeName by rememberSaveable { mutableStateOf<String?>(null) }
     val type = typeName?.let { NodeType.valueOf(it) }
     var name by rememberSaveable { mutableStateOf("") }
@@ -2459,11 +2726,24 @@ private fun AddChildDialog(
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     modifier = Modifier.fillMaxWidth(),
                 )
+                Spacer(Modifier.height(14.dp))
+                Text("Category", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(6.dp))
+                CategoryChooser(
+                    categories = cats,
+                    selected = category,
+                    onSelect = { category = it },
+                    onAdd = { new ->
+                        val existing = cats.firstOrNull { it.equals(new, ignoreCase = true) }
+                        if (existing == null) cats = cats + new
+                        category = existing ?: new
+                    },
+                )
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { type?.let { onConfirm(it, name) } },
+                onClick = { type?.let { onConfirm(it, name, category, cats - categories.toSet()) } },
                 enabled = type != null && name.isNotBlank(),
             ) { Text("Done") }
         },
@@ -2571,6 +2851,8 @@ private fun InfoDialog(store: InventoryStore, node: Node, onDismiss: () -> Unit)
                     if (node.createdAt > 0) addedFormat.format(Date(node.createdAt)) else "Unknown",
                 )
                 InfoRow("Stored in", location.ifEmpty { "Top level" })
+                if (node.parentId != null) InfoRow("Category", node.category ?: "None")
+                if (node.parentId == null && node.categories.isNotEmpty()) InfoRow("Categories", node.categories.joinToString(", "))
                 InfoRow("Photos", node.photoPaths.size.toString())
                 if (node.canHoldChildren) {
                     val (items, containers) = store.countInside(node.id)
@@ -2776,12 +3058,12 @@ private fun SearchScreen(
     LaunchedEffect(q) {
         if (q.isNotEmpty()) {
             delay(1500)
-            val n = store.nodes.count { it.name.contains(q, ignoreCase = true) || (it.hasQr && it.qr.contains(q, ignoreCase = true)) }
+            val n = store.nodes.count { it.name.contains(q, ignoreCase = true) || (it.hasQr && it.qr.contains(q, ignoreCase = true)) || it.category?.contains(q, ignoreCase = true) == true }
             ActivityLog.log("Searched by name", "“$q” · $n result(s)")
         }
     }
     val textMatches = if (q.isEmpty()) emptyList() else store.nodes
-        .filter { it.name.contains(q, ignoreCase = true) || (it.hasQr && it.qr.contains(q, ignoreCase = true)) }
+        .filter { it.name.contains(q, ignoreCase = true) || (it.hasQr && it.qr.contains(q, ignoreCase = true)) || it.category?.contains(q, ignoreCase = true) == true }
         .sortedBy { it.name.lowercase() }
 
     Scaffold(
@@ -2938,6 +3220,7 @@ private fun SearchResultRow(store: InventoryStore, node: Node, score: Float?, on
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(node.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                node.category?.let { Tag(it, neutral = true) }
                 Text(
                     "${if (node.isTemporary) "Temporary storage" else typeLabel(node.type)} · $location",
                     style = MaterialTheme.typography.bodySmall,

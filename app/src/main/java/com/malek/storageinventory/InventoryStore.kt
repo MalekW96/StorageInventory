@@ -27,6 +27,12 @@ data class Node(
     val archived: Boolean = false,
     /** Last change time (ms); the newest change wins when devices sync. */
     val updatedAt: Long = createdAt,
+    /** A temporary bin the person chose to keep as a regular bin (no QR code needed). */
+    val permanent: Boolean = false,
+    /** Category (label) of an item or container, chosen from its main bin's list. */
+    val category: String? = null,
+    /** Categories defined on a main bin. */
+    val categories: List<String> = emptyList(),
 ) {
     /** The main (first) photo. */
     val photoPath: String? get() = photoPaths.firstOrNull()
@@ -37,7 +43,7 @@ data class Node(
     val hasQr: Boolean get() = qr.isNotBlank()
 
     /** A storage created without a QR label yet. */
-    val isTemporary: Boolean get() = type == NodeType.STORAGE && !hasQr
+    val isTemporary: Boolean get() = type == NodeType.STORAGE && !hasQr && !permanent
 }
 
 /** Keeps the inventory in memory (observable by Compose) and saves it to a JSON file on the phone. */
@@ -145,7 +151,14 @@ class InventoryStore(context: Context) {
         return items to containers
     }
 
-    fun add(qr: String, name: String, type: NodeType, parentId: String?, photoPaths: List<String> = emptyList()): Node {
+    fun add(
+        qr: String,
+        name: String,
+        type: NodeType,
+        parentId: String?,
+        photoPaths: List<String> = emptyList(),
+        category: String? = null,
+    ): Node {
         val node = Node(
             id = UUID.randomUUID().toString(),
             qr = qr,
@@ -154,6 +167,7 @@ class InventoryStore(context: Context) {
             parentId = parentId,
             createdAt = now(),
             photoPaths = photoPaths,
+            category = category?.takeIf { it.isNotBlank() },
         )
         nodes.add(node)
         save()
@@ -222,6 +236,69 @@ class InventoryStore(context: Context) {
         saveTombs()
         photos.forEach { File(it).delete() }
         gone.forEach { onLocalDelete?.invoke(it.id, t, it.photoPaths) }
+    }
+
+    // ----- Temporary → permanent, categories -----
+
+    /** Keeps a temporary bin as a regular bin. */
+    fun setPermanent(id: String) {
+        val index = nodes.indexOfFirst { it.id == id }
+        if (index < 0 || !nodes[index].isTemporary) return
+        change(index) { it.copy(permanent = true) }
+        ActivityLog.log("Made permanent", "“${nodes[index].name}”")
+    }
+
+    /** The main bin an entry belongs to. */
+    fun rootOf(id: String): Node? = path(id).firstOrNull()
+
+    /** Everything inside an entry, at any depth. */
+    fun descendants(id: String): List<Node> {
+        val out = ArrayList<Node>()
+        val queue = ArrayDeque(listOf(id))
+        while (queue.isNotEmpty()) {
+            val p = queue.removeFirst()
+            nodes.filter { it.parentId == p }.forEach { out.add(it); queue.add(it.id) }
+        }
+        return out
+    }
+
+    /** Categories defined for the main bin that holds this entry. */
+    fun categoriesFor(id: String): List<String> = rootOf(id)?.categories ?: emptyList()
+
+    fun addCategory(id: String, name: String) {
+        val root = rootOf(id) ?: return
+        val n = name.trim()
+        if (n.isEmpty() || root.categories.any { it.equals(n, ignoreCase = true) }) return
+        val index = nodes.indexOfFirst { it.id == root.id }
+        change(index) { it.copy(categories = it.categories + n) }
+        ActivityLog.log("Category added", "“$n” in “${root.name}”")
+    }
+
+    fun renameCategory(id: String, from: String, to: String) {
+        val root = rootOf(id) ?: return
+        val t = to.trim()
+        if (t.isEmpty() || t == from) return
+        change(nodes.indexOfFirst { it.id == root.id }) { r -> r.copy(categories = r.categories.map { if (it == from) t else it }) }
+        descendants(root.id).filter { it.category == from }.forEach { d ->
+            change(nodes.indexOfFirst { it.id == d.id }) { it.copy(category = t) }
+        }
+        ActivityLog.log("Category renamed", "“$from” → “$t” in “${root.name}”")
+    }
+
+    fun deleteCategory(id: String, name: String) {
+        val root = rootOf(id) ?: return
+        change(nodes.indexOfFirst { it.id == root.id }) { r -> r.copy(categories = r.categories - name) }
+        descendants(root.id).filter { it.category == name }.forEach { d ->
+            change(nodes.indexOfFirst { it.id == d.id }) { it.copy(category = null) }
+        }
+        ActivityLog.log("Category deleted", "“$name” in “${root.name}”")
+    }
+
+    fun setCategory(id: String, category: String?) {
+        val index = nodes.indexOfFirst { it.id == id }
+        if (index < 0 || nodes[index].category == category) return
+        change(index) { it.copy(category = category) }
+        ActivityLog.log("Category set", "“${nodes[index].name}” → ${category?.let { "“$it”" } ?: "none"}")
     }
 
     // ----- Changes coming from other devices (never reported back) -----
@@ -294,6 +371,9 @@ class InventoryStore(context: Context) {
                             if (o.isNull("photoPath")) null else o.optString("photoPath").ifBlank { null }
                         ),
                         archived = o.optBoolean("archived", false),
+                        permanent = o.optBoolean("permanent", false),
+                        category = if (o.isNull("category")) null else o.optString("category").takeIf { it.isNotBlank() },
+                        categories = o.optJSONArray("categories")?.let { a -> (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() } } ?: emptyList(),
                         updatedAt = o.optLong("updatedAt", o.optLong("createdAt", 0L)),
                     )
                 )
@@ -327,6 +407,9 @@ class InventoryStore(context: Context) {
                     .put("photos", JSONArray(n.photoPaths))
                     .put("photoPath", n.photoPath ?: JSONObject.NULL)
                     .put("archived", n.archived)
+                    .put("permanent", n.permanent)
+                    .put("category", n.category ?: JSONObject.NULL)
+                    .put("categories", JSONArray(n.categories))
                     .put("updatedAt", n.updatedAt)
             )
         }

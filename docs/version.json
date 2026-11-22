@@ -1,5 +1,5 @@
 {
-  "version": "2.4.0.0",
-  "build": 14,
-  "notes": "New start screen while the app loads (with version and build). The main page now shows when your inventory last synced successfully, on the right above your bins. Sign-in is simpler: a G button for Google, Sign in, and Create new account."
+  "version": "2.5.0.0",
+  "build": 15,
+  "notes": "Categories: inside a bin, tap “+ Category” to make labels (e.g. Tools, Cables). Pick one when you scan or photograph an item; tap a category chip to see just those items, and search finds items by category. Temporary bins can now be made permanent: press and hold to select them, then ☰ › Make permanent (or swipe left › More › Make permanent)."
 }
